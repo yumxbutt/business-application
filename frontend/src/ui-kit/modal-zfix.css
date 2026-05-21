@@ -1,0 +1,8 @@
+/* Modal z-index fix for dropdowns.
+   Keep this file minimal so it doesn't fight with `src/index.css` modal styling. */
+.modal-backdrop {
+  z-index: 10000;
+}
+.modal-card {
+  z-index: 10001;
+}

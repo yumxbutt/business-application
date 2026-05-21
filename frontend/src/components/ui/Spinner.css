@@ -1,0 +1,24 @@
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.spinner {
+  display: inline-flex;
+  color: var(--color-primary, #6366f1);
+}
+
+.spinner svg {
+  animation: spin 0.8s linear infinite;
+  display: block;
+}
+
+.spinner--sm svg { width: 16px; height: 16px; }
+.spinner--md svg { width: 24px; height: 24px; }
+.spinner--lg svg { width: 40px; height: 40px; }
+
+.spinner-center {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 40px 0;
+}

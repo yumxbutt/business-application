@@ -1,0 +1,81 @@
+@import './variables.css';
+
+/* Base */
+.ui-root{font-family:var(--ui-font);color:var(--text)}
+
+/* Buttons */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:0.55rem;padding:0.6rem 0.95rem;border-radius:calc(var(--radius-sm) - 2px);border:1px solid transparent;font-weight:800;cursor:pointer;transition:transform var(--transition-fast),box-shadow var(--transition-fast),background var(--transition-fast),border-color var(--transition-fast);line-height:1}
+.btn:disabled{opacity:0.6;cursor:not-allowed}
+.btn--primary{
+  background:
+    radial-gradient(circle at 30% 20%, rgba(255,255,255,0.22), transparent 55%),
+    linear-gradient(135deg, var(--accent), #818cf8);
+  color:var(--text-inverse);
+  box-shadow:var(--shadow-soft);
+  border-color:transparent
+}
+.btn--primary:hover{transform:translateY(-1px);filter:saturate(1.05)}
+.btn--secondary{background:rgba(255,255,255,0.7);backdrop-filter:blur(8px);color:var(--text);border:1px solid var(--border-subtle);box-shadow:0 10px 22px rgba(15,23,42,0.06)}
+.btn--ghost{background:transparent;color:var(--muted);border:none}
+.btn--icon{padding:0.35rem 0.5rem;border-radius:8px}
+
+/* Map existing classnames to new look (backwards compat) */
+.primary-action-button{display:inline-flex;padding:0.5rem 0.9rem;align-items:center;justify-content:center;border-radius:var(--radius-sm);background:var(--accent);color:var(--text-inverse);font-weight:700;cursor:pointer}
+.secondary-action-button{display:inline-flex;padding:0.45rem 0.8rem;align-items:center;border-radius:var(--radius-sm);background:transparent;border:1px solid var(--border-subtle);color:var(--text);cursor:pointer}
+.table-action-button{padding:0.35rem 0.55rem;border-radius:6px;background:transparent;border:1px solid var(--border-lighter);cursor:pointer}
+.table-action-button--danger{background:transparent;border:1px solid rgba(220,38,38,0.12);color:var(--danger)}
+.table-action-button--danger:hover{background:rgba(220,38,38,0.03)}
+
+/* Cards */
+.page-card{background:var(--card-bg);border-radius:var(--radius-md);padding:1rem;box-shadow:var(--shadow-soft);border:1px solid var(--border-lighter)}
+.page-card__header{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
+.page-card__header h2{margin:0}
+.page-card__body{padding-top:6px}
+
+/* Inputs & selects */
+.form-input-sm, .ui-select{
+  padding:0.62rem 0.75rem;
+  border-radius:10px;
+  border:1px solid var(--border-subtle);
+  background:rgba(255,255,255,0.78);
+  backdrop-filter:blur(8px);
+  color:var(--text);
+  min-height:38px;
+  box-shadow:0 10px 22px rgba(15,23,42,0.05);
+}
+.form-input-sm:focus, .ui-select:focus{outline:3px solid rgba(37,99,235,0.18);outline-offset:2px}
+.form-field span{display:block;color:var(--muted);font-size:0.86rem;margin-bottom:8px}
+
+/* Table tweaks */
+.data-table{width:100%;border-collapse:collapse;font-size:0.89rem;background:transparent}
+.data-table th,.data-table td{padding:0.75rem 0.6rem;border-bottom:1px solid var(--border-lighter)}
+.data-table thead th{color:var(--muted);font-weight:700;text-align:left}
+.empty-state-cell{color:var(--muted);text-align:center;padding:2rem}
+.table-wrap{overflow:auto}
+
+/* Totals panel */
+.totals-panel{background:var(--surface);padding:0.8rem;border-radius:10px;border:1px solid var(--border-lighter);width:320px}
+.totals-row{display:flex;justify-content:space-between;padding:4px 0;color:var(--muted)}
+.totals-row--total{font-weight:800;color:var(--text);font-size:1.06rem}
+.due-row{color:var(--danger);font-weight:700}
+
+/* Utility */
+.text-right{text-align:right}
+.inline-actions{display:flex;gap:0.5rem}
+.inline-actions--end{margin-left:auto}
+
+/* product search dropdown */
+.product-search-dropdown{position:absolute;left:0;right:0;top:100%;background:var(--surface);border:1px solid var(--border-subtle);z-index:999;border-radius:8px;padding:6px;margin-top:8px;max-height:260px;overflow:auto;box-shadow:var(--shadow-deep)}
+.product-search-item{padding:0.6rem 0.7rem;display:flex;justify-content:space-between;align-items:center;cursor:pointer}
+.product-search-item:hover{background:rgba(0,0,0,0.02)}
+.product-search-sku{color:var(--muted);font-size:0.85rem}
+
+/* Responsive helpers */
+@media (max-width: 880px){
+  .dashboard-grid{grid-template-columns:1fr}
+  .totals-panel{width:100%}
+}
+
+/* Spinner (used by Button.jsx) */
+@keyframes ui-spin{to{transform:rotate(360deg)}}
+.spinner{animation:ui-spin 800ms linear infinite}
