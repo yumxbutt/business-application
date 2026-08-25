@@ -106,7 +106,7 @@ export default function PaymentAccountsPage() {
       const v = Number(n || 0);
       return v === 0 ? '0.00' : (v > 0 ? `${fmtNum(v)} Dr` : `${fmtNum(Math.abs(v))} Cr`);
     };
-    const rows = stmtData.rows.map((r, i) => `
+    const rows = stmtData.rows.map((r) => `
       <tr>
         <td>${fmtPrintDate(r.date)}</td>
         <td>${r.referenceNo || '—'}</td>

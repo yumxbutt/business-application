@@ -44,15 +44,6 @@ export default function PaymentSelector({ totalAmount = 0, branchId, onChange, d
       .catch(() => setLoadError('Could not load payment accounts'));
   }, [branchId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // When totalAmount changes and only one row is present, auto-update its amount
-  useEffect(() => {
-    if (rows.length === 1) {
-      const updated = [{ ...rows[0], amount: toMoney(totalAmount) }];
-      setRows(updated);
-      notifyChange(updated);
-    }
-  }, [totalAmount]); // eslint-disable-line react-hooks/exhaustive-deps
-
   // Notify parent on every change
   const notifyChange = useCallback(
     (nextRows) => {
@@ -72,6 +63,15 @@ export default function PaymentSelector({ totalAmount = 0, branchId, onChange, d
     },
     [accounts, onChange]
   );
+
+  // When totalAmount changes and only one row is present, auto-update its amount
+  useEffect(() => {
+    if (rows.length === 1) {
+      const updated = [{ ...rows[0], amount: toMoney(totalAmount) }];
+      setRows(updated);
+      notifyChange(updated);
+    }
+  }, [totalAmount]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const setRowsAndNotify = (next) => {
     const resolved = typeof next === 'function' ? next(rows) : next;
@@ -116,10 +116,8 @@ export default function PaymentSelector({ totalAmount = 0, branchId, onChange, d
       {label && <div className="payment-selector__label">{label}</div>}
 
       <div className="payment-selector__rows">
-        {rows.map((row, index) => {
-          const acc = accounts.find((a) => a.id === row.paymentAccountId);
-          return (
-            <div key={index} className="payment-selector__row">
+        {rows.map((row, index) => (
+            <div key={`${row.paymentAccountId || 'row'}-${index}`} className="payment-selector__row">
               <select
                 className="form-input-sm payment-selector__account"
                 value={row.paymentAccountId || ''}
@@ -157,8 +155,7 @@ export default function PaymentSelector({ totalAmount = 0, branchId, onChange, d
                 </button>
               )}
             </div>
-          );
-        })}
+        ))}
       </div>
 
       <div className="payment-selector__footer">

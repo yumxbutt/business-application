@@ -484,8 +484,7 @@ export default function ProductManagementPage() {
                     </thead>
                     <tbody>
                       {unitRows.map((row, index) => (
-                        // eslint-disable-next-line react/no-array-index-key
-                        <tr key={index}>
+                        <tr key={`${row.unitId || 'unit'}-${index}`}>
                           <td>
                             <select
                               value={row.unitId}

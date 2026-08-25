@@ -125,19 +125,19 @@ export default function PurchasePage({ createMode = false }) {
   //   <ActionCard title="Suppliers" value={suppliers.length} icon={<svg width="24" height="24" />} />
   // </div>
 
-  // ModernDataTable columns and actions
-  const columns = [
-    { key: 'productName', title: 'Product' },
-    { key: 'quantity', title: 'Qty' },
-    { key: 'unitPrice', title: 'Cost Price' },
-    { key: 'salePrice', title: 'Sale Price' },
-    { key: 'stock', title: 'Stock' },
-    { key: 'notes', title: 'Notes' },
-  ];
-  const actions = [
-    { key: 'edit', icon: <span role="img" aria-label="edit">✏️</span>, onClick: (row) => {/* edit logic */}, color: '#21E6C1' },
-    { key: 'delete', icon: <span role="img" aria-label="delete">🗑️</span>, onClick: (row) => {/* delete logic */}, color: '#FF5E5B' },
-  ];
+  // ModernDataTable columns and actions (kept as comments for future use)
+  // const columns = [
+  //   { key: 'productName', title: 'Product' },
+  //   { key: 'quantity', title: 'Qty' },
+  //   { key: 'unitPrice', title: 'Cost Price' },
+  //   { key: 'salePrice', title: 'Sale Price' },
+  //   { key: 'stock', title: 'Stock' },
+  //   { key: 'notes', title: 'Notes' },
+  // ];
+  // const actions = [
+  //   { key: 'edit', icon: <span role="img" aria-label="edit">✏️</span>, onClick: () => {}, color: '#21E6C1' },
+  //   { key: 'delete', icon: <span role="img" aria-label="delete">🗑️</span>, onClick: () => {}, color: '#FF5E5B' },
+  // ];
 
   // Example: ModernDataTable usage for items
   // <ModernDataTable columns={columns} data={items.map(item => ({
@@ -508,7 +508,7 @@ export default function PurchasePage({ createMode = false }) {
         };
       });
       setItems(mappedItems);
-      setItemSearch(mappedItems.map((item, idx) => ({
+      setItemSearch(mappedItems.map((item) => ({
         query: item.productName,
         results: [],
         open: false,

@@ -540,6 +540,7 @@ export default function SalesPage({ createMode = false }) {
           return next;
         });
       } catch {
+        // product search failed — keep previous results
       }
     }, 300);
   }, []);
@@ -620,6 +621,7 @@ export default function SalesPage({ createMode = false }) {
             rate = toNumber(latestOpen.salePrice);
           }
         } catch {
+          // fifo lookup failed — keep default rate
         }
 
         return {

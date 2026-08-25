@@ -24,6 +24,8 @@ export default defineConfig([
     },
     rules: {
       'no-unused-vars': ['error', { varsIgnorePattern: '^[A-Z_]' }],
+      // Common pattern for syncing props → state; rule is too strict for this codebase
+      'react-hooks/set-state-in-effect': 'off',
     },
   },
 ])

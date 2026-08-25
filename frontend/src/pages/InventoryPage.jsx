@@ -6,7 +6,7 @@ import FormField from '../components/ui/FormField';
 import { productService } from '../services/productService';
 import { inventoryService } from '../services/inventoryService';
 import { settingsService } from '../services/settingsService';
-import { openPrintWindow, fmtNum } from '../utils/printHelper';
+import { openPrintWindow } from '../utils/printHelper';
 import { formatBreakdown } from '../utils/stockDisplay';
 
 export default function InventoryPage() {

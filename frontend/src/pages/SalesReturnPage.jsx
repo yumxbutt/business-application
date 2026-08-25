@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import PageCard from '../components/ui/PageCard';
 import ModalDialog from '../components/ui/ModalDialog';
@@ -283,6 +283,7 @@ export default function SalesReturnPage() {
         setInvoiceSearchResults(results.slice(0, 8));
         setInvoiceSearchOpen(true);
       } catch {
+        // invoice search failed
       }
     }, 300);
   };

@@ -258,7 +258,20 @@ function ConfirmDialog({ form, contacts, branchName, onConfirm, onCancel, saving
 }
 
 // ─── Voucher Form Modal ──────────────────────────────────────────────────────
-function VoucherFormModal({ form, setForm, branches, contacts, loadingContacts, user, onClose, onSubmit, ledgerBalance, loadingLedger }) {
+function VoucherFormModal({
+  form,
+  setForm,
+  branches,
+  contacts,
+  loadingContacts,
+  user,
+  onClose,
+  onSubmit,
+  ledgerBalance,
+  loadingLedger,
+  setVoucherPayments,
+  saving,
+}) {
   const isAdmin = !user || user.role === 'main_admin';
   const amount = Number(form.amount || 0);
   const netBalance = ledgerBalance !== null
@@ -565,7 +578,8 @@ export default function CashVoucherPage() {
         <VoucherFormModal form={form} setForm={setForm} branches={branches}
           contacts={contacts} loadingContacts={loadingContacts} user={user}
           onClose={() => setShowForm(false)} onSubmit={handleFormSubmit}
-          ledgerBalance={ledgerBalance} loadingLedger={loadingLedger} />
+          ledgerBalance={ledgerBalance} loadingLedger={loadingLedger}
+          setVoucherPayments={setVoucherPayments} saving={saving} />
       )}
       {showConfirm && (
         <ConfirmDialog form={form} contacts={contacts} branchName={selectedBranchName}
