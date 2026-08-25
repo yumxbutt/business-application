@@ -101,10 +101,98 @@ ${footer}
 </body></html>`;
 
   const win = window.open('', '_blank', 'width=900,height=700');
-  win.document.write(html);
-  win.document.close();
-  win.focus();
-  setTimeout(() => win.print(), 450);
+
+  const printViaIframeFallback = () => {
+    const frame = document.createElement('iframe');
+    frame.style.position = 'fixed';
+    frame.style.right = '0';
+    frame.style.bottom = '0';
+    frame.style.width = '0';
+    frame.style.height = '0';
+    frame.style.border = '0';
+    frame.setAttribute('aria-hidden', 'true');
+
+    const cleanup = () => {
+      try {
+        frame.remove();
+      } catch {
+        // no-op
+      }
+    };
+
+    frame.onload = () => {
+      try {
+        const frameWin = frame.contentWindow;
+        if (!frameWin) {
+          cleanup();
+          return;
+        }
+
+        frameWin.onafterprint = cleanup;
+        frameWin.focus();
+        setTimeout(() => {
+          try {
+            frameWin.print();
+          } finally {
+            setTimeout(cleanup, 2000);
+          }
+        }, 120);
+      } catch {
+        cleanup();
+      }
+    };
+
+    frame.srcdoc = html;
+    document.body.appendChild(frame);
+  };
+
+  if (!win) {
+    printViaIframeFallback();
+    return;
+  }
+
+  try {
+    win.document.open();
+    win.document.write(html);
+    win.document.close();
+  } catch {
+    try {
+      win.close();
+    } catch {
+      // no-op
+    }
+    printViaIframeFallback();
+    return;
+  }
+
+  let hasPrinted = false;
+
+  const triggerPrint = () => {
+    if (hasPrinted) return;
+    hasPrinted = true;
+    try {
+      win.focus();
+      win.print();
+    } catch {
+      // no-op
+    }
+  };
+
+  if (win.document?.readyState === 'complete') {
+    setTimeout(triggerPrint, 200);
+  } else {
+    win.onload = () => setTimeout(triggerPrint, 200);
+  }
+
+  // Fallback if load event does not fire on some browsers/webviews.
+  setTimeout(triggerPrint, 1200);
+
+  // If popup prints fail/blank, fallback to iframe print in current window context.
+  setTimeout(() => {
+    if (!hasPrinted) {
+      printViaIframeFallback();
+    }
+  }, 1800);
 }
 
 /** Format a date ISO string to readable format */
@@ -116,4 +204,390 @@ export function fmtPrintDate(iso) {
 /** Format number to 2 dp */
 export function fmtNum(n) {
   return Number(n || 0).toFixed(2);
+}
+
+const POS_RECEIPT_CSS = `
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Courier New',Courier,monospace;font-size:12px;color:#111;background:#fff;padding:8px}
+.wrap{width:72mm;max-width:100%;margin:0 auto}
+.center{text-align:center}
+.muted{color:#555;font-size:11px}
+.hr{border:0;border-top:1px dashed #333;margin:8px 0}
+.co{font-size:15px;font-weight:700;letter-spacing:.3px}
+.meta{font-size:11px;line-height:1.45}
+.meta div{display:flex;justify-content:space-between;gap:8px}
+table{width:100%;border-collapse:collapse;font-size:11px}
+th,td{padding:2px 0;vertical-align:top}
+th{text-align:left;border-bottom:1px solid #333;font-weight:700}
+td.tr,th.tr{text-align:right}
+.item-name{font-weight:600}
+.tot{margin-top:6px;font-size:12px}
+.tot-row{display:flex;justify-content:space-between;padding:1px 0}
+.tot-row.grand{font-size:14px;font-weight:700;margin-top:4px;border-top:1px dashed #333;padding-top:6px}
+.thanks{margin-top:10px;text-align:center;font-size:11px}
+@media print{
+  @page{size:80mm auto;margin:4mm}
+  body{padding:0}
+}
+`;
+
+/**
+ * Open a narrow thermal-style POS receipt and trigger print.
+ */
+export function openPosReceiptWindow({
+  company = {},
+  invoiceNo,
+  saleDate,
+  branchName,
+  customerName,
+  cashierName,
+  items = [],
+  subTotal,
+  discount,
+  taxMode,
+  taxRate,
+  taxAmount,
+  totalAmount,
+  paidAmount,
+}) {
+  const companyName = company.companyName || 'Your Company';
+  const address = company.address ? `<div class="muted">${company.address}</div>` : '';
+  const phone = company.phone ? `<div class="muted">Tel: ${company.phone}</div>` : '';
+  const taxLine = Number(taxAmount || 0) > 0
+    ? `<div class="tot-row"><span>Tax (${fmtNum(taxRate)}%)</span><span>${fmtNum(taxAmount)}</span></div>`
+    : `<div class="tot-row"><span>Tax</span><span>No Tax</span></div>`;
+
+  const rows = (items || [])
+    .map((item) => {
+      const name = item.product?.name || item.productName || 'Item';
+      const qty = fmtNum(item.quantity ?? item.unitQty);
+      const rate = fmtNum(item.unitPrice);
+      const amount = fmtNum(item.lineAmount ?? Number(item.quantity || 0) * Number(item.unitPrice || 0));
+      return `<tr>
+        <td colspan="3"><div class="item-name">${name}</div></td>
+      </tr>
+      <tr>
+        <td>${qty} x ${rate}</td>
+        <td></td>
+        <td class="tr">${amount}</td>
+      </tr>`;
+    })
+    .join('');
+
+  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Receipt ${invoiceNo || ''}</title>
+<style>${POS_RECEIPT_CSS}</style></head><body>
+<div class="wrap">
+  <div class="center">
+    <div class="co">${companyName}</div>
+    ${address}${phone}
+    <div style="margin-top:6px;font-weight:700">SALES RECEIPT</div>
+  </div>
+  <hr class="hr" />
+  <div class="meta">
+    <div><span>Invoice</span><span>${invoiceNo || '–'}</span></div>
+    <div><span>Date</span><span>${fmtPrintDate(saleDate)}</span></div>
+    <div><span>Branch</span><span>${branchName || '–'}</span></div>
+    <div><span>Customer</span><span>${customerName || '–'}</span></div>
+    <div><span>Cashier</span><span>${cashierName || '–'}</span></div>
+    <div><span>Tax Mode</span><span>${taxMode === 'cash_tax' ? 'Cash Tax' : taxMode === 'card_tax' ? 'Card Tax' : 'No Tax'}</span></div>
+  </div>
+  <hr class="hr" />
+  <table>
+    <thead><tr><th>Item</th><th></th><th class="tr">Amt</th></tr></thead>
+    <tbody>${rows || '<tr><td colspan="3">No items</td></tr>'}</tbody>
+  </table>
+  <div class="tot">
+    <div class="tot-row"><span>Subtotal</span><span>${fmtNum(subTotal)}</span></div>
+    <div class="tot-row"><span>Discount</span><span>${fmtNum(discount)}</span></div>
+    ${taxLine}
+    <div class="tot-row grand"><span>TOTAL</span><span>${fmtNum(totalAmount)}</span></div>
+    <div class="tot-row"><span>Paid</span><span>${fmtNum(paidAmount)}</span></div>
+  </div>
+  <hr class="hr" />
+  <div class="thanks">${company.footerNote || 'Thank you for your purchase'}</div>
+</div>
+</body></html>`;
+
+  const win = window.open('', '_blank', 'width=420,height=640');
+  const printViaIframeFallback = () => {
+    const frame = document.createElement('iframe');
+    frame.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0';
+    frame.setAttribute('aria-hidden', 'true');
+    const cleanup = () => {
+      try {
+        frame.remove();
+      } catch {
+        // no-op
+      }
+    };
+    frame.onload = () => {
+      try {
+        const frameWin = frame.contentWindow;
+        if (!frameWin) {
+          cleanup();
+          return;
+        }
+        frameWin.onafterprint = cleanup;
+        frameWin.focus();
+        setTimeout(() => {
+          try {
+            frameWin.print();
+          } finally {
+            setTimeout(cleanup, 2000);
+          }
+        }, 120);
+      } catch {
+        cleanup();
+      }
+    };
+    frame.srcdoc = html;
+    document.body.appendChild(frame);
+  };
+
+  if (!win) {
+    printViaIframeFallback();
+    return;
+  }
+
+  try {
+    win.document.open();
+    win.document.write(html);
+    win.document.close();
+  } catch {
+    try {
+      win.close();
+    } catch {
+      // no-op
+    }
+    printViaIframeFallback();
+    return;
+  }
+
+  let hasPrinted = false;
+  const triggerPrint = () => {
+    if (hasPrinted) return;
+    hasPrinted = true;
+    try {
+      win.focus();
+      win.print();
+    } catch {
+      // no-op
+    }
+  };
+
+  if (win.document?.readyState === 'complete') {
+    setTimeout(triggerPrint, 200);
+  } else {
+    win.onload = () => setTimeout(triggerPrint, 200);
+  }
+  setTimeout(triggerPrint, 1200);
+}
+
+const KITCHEN_TOKEN_CSS = `
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{
+  height:auto!important;margin:0;padding:0;background:#fff;color:#111;
+  font-family:'Courier New',Courier,monospace;font-size:12px;
+}
+.token{
+  width:72mm;max-width:100%;
+  margin:0 auto;
+  padding:4px 6px 2px;
+  height:auto;
+  overflow:visible;
+  page-break-inside:avoid;
+  break-inside:avoid;
+}
+.page-break{
+  display:block;
+  width:100%;
+  height:0;
+  margin:0;
+  padding:0;
+  border:0;
+  page-break-after:always;
+  break-after:page;
+}
+.center{text-align:center}
+.hr{border:0;border-top:1px dashed #333;margin:4px 0}
+.stage{display:inline-block;border:2px solid #111;padding:1px 6px;font-weight:700;letter-spacing:.04em;font-size:11px}
+.meta{font-size:11px;line-height:1.35}
+.meta div{display:flex;justify-content:space-between;gap:6px}
+.item{margin:6px 0;text-align:center}
+.item-name{font-size:16px;font-weight:700;line-height:1.2}
+.item-qty{margin-top:4px;font-size:24px;font-weight:700;line-height:1}
+.item-unit{font-size:11px;color:#444;margin-top:2px}
+.footer{margin-top:4px;text-align:center;font-size:10px;color:#444}
+.cut-feed{
+  margin-top:8px;
+  padding-top:6px;
+  border-top:2px dashed #111;
+  text-align:center;
+  font-size:10px;
+  font-weight:700;
+  letter-spacing:.06em;
+  /* Extra feed so thermal cutter reaches cut position after text */
+  min-height:12mm;
+}
+@media print{
+  html,body{height:auto!important;margin:0!important;padding:0!important}
+  /* One short page per token so thermal driver cuts individually */
+  @page{size:80mm 100mm;margin:2mm}
+  .token{width:100%;padding:0;margin:0}
+  .page-break{
+    page-break-after:always!important;
+    break-after:page!important;
+  }
+}
+`;
+
+const escapeHtml = (value) =>
+  String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+
+const printHtmlDocument = (html) => {
+  const win = window.open('', '_blank', 'width=420,height=640');
+  const printViaIframeFallback = () => {
+    const frame = document.createElement('iframe');
+    frame.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0';
+    frame.setAttribute('aria-hidden', 'true');
+    const cleanup = () => {
+      try {
+        frame.remove();
+      } catch {
+        // no-op
+      }
+    };
+    frame.onload = () => {
+      try {
+        const frameWin = frame.contentWindow;
+        if (!frameWin) {
+          cleanup();
+          return;
+        }
+        frameWin.onafterprint = cleanup;
+        frameWin.focus();
+        setTimeout(() => {
+          try {
+            frameWin.print();
+          } finally {
+            setTimeout(cleanup, 2000);
+          }
+        }, 120);
+      } catch {
+        cleanup();
+      }
+    };
+    frame.srcdoc = html;
+    document.body.appendChild(frame);
+  };
+
+  if (!win) {
+    printViaIframeFallback();
+    return;
+  }
+
+  try {
+    win.document.open();
+    win.document.write(html);
+    win.document.close();
+  } catch {
+    try {
+      win.close();
+    } catch {
+      // no-op
+    }
+    printViaIframeFallback();
+    return;
+  }
+
+  let hasPrinted = false;
+  const triggerPrint = () => {
+    if (hasPrinted) return;
+    hasPrinted = true;
+    try {
+      win.focus();
+      win.print();
+    } catch {
+      // no-op
+    }
+  };
+
+  if (win.document?.readyState === 'complete') {
+    setTimeout(triggerPrint, 200);
+  } else {
+    win.onload = () => setTimeout(triggerPrint, 200);
+  }
+  setTimeout(triggerPrint, 1200);
+};
+
+/**
+ * Print one kitchen token slip per product (restaurant POS).
+ * Each token is its own print page + page-break so thermal cutters cut individually.
+ * stages: 'new' | 'hold' | 'final'
+ */
+export function openKitchenTokensWindow({
+  company = {},
+  branchName,
+  orderLabel,
+  invoiceNo,
+  cashierName,
+  stage = 'new',
+  items = [],
+}) {
+  const list = (items || []).filter((item) => Number(item.quantity || item.unitQty || 0) > 0);
+  if (!list.length) return;
+
+  const stageLabel =
+    stage === 'final' ? 'FINAL' : stage === 'hold' ? 'HOLD / RUNNING' : 'KOT / NEW';
+  const now = new Date().toLocaleString('en-GB', {
+    day: '2-digit',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
+
+  // Hard page-break after EVERY token (including last) so cutter fires per slip.
+  const slips = list
+    .map((item, idx) => {
+      const name = escapeHtml(item.product?.name || item.productName || item.name || 'Item');
+      const qty = Number(item.quantity ?? item.unitQty ?? 0);
+      const qtyLabel = Number.isInteger(qty) ? String(qty) : qty.toFixed(1);
+      const unit = escapeHtml(item.unitName || item.unit || '');
+      return `<section class="token">
+  <div class="center">
+    <div style="font-weight:700;font-size:13px">${escapeHtml(company.companyName || 'Kitchen')}</div>
+    <div style="margin-top:3px"><span class="stage">${stageLabel}</span></div>
+  </div>
+  <hr class="hr" />
+  <div class="meta">
+    <div><span>Token</span><span>#${idx + 1}/${list.length}</span></div>
+    <div><span>Time</span><span>${escapeHtml(now)}</span></div>
+    <div><span>Table / Order</span><span>${escapeHtml(orderLabel || '-')}</span></div>
+    ${invoiceNo ? `<div><span>Invoice</span><span>${escapeHtml(invoiceNo)}</span></div>` : ''}
+    <div><span>Branch</span><span>${escapeHtml(branchName || '-')}</span></div>
+    <div><span>Cashier</span><span>${escapeHtml(cashierName || '-')}</span></div>
+  </div>
+  <hr class="hr" />
+  <div class="item">
+    <div class="item-name">${name}</div>
+    <div class="item-qty">x ${qtyLabel}</div>
+    ${unit ? `<div class="item-unit">${unit}</div>` : ''}
+  </div>
+  <hr class="hr" />
+  <div class="footer">Kitchen token - tear &amp; prepare</div>
+  <div class="cut-feed">--- CUT ---</div>
+</section>
+<div class="page-break"></div>`;
+    })
+    .join('');
+
+  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Kitchen Tokens</title>
+<style>${KITCHEN_TOKEN_CSS}</style></head><body>${slips}</body></html>`;
+
+  printHtmlDocument(html);
 }

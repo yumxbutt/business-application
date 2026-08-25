@@ -5,7 +5,7 @@ import { accessRightsService } from '../services/accessRightsService';
 import { useAuth } from '../context/AuthContext';
 
 export default function AccessRightsPage() {
-  const { user } = useAuth();
+  const { user, refreshSession } = useAuth();
   const [users, setUsers] = useState([]);
   const [catalog, setCatalog] = useState([]);
   const [selectedUserId, setSelectedUserId] = useState('');
@@ -75,7 +75,12 @@ export default function AccessRightsPage() {
       setUsers((prev) =>
         prev.map((item) => (item.id === updated.id ? { ...item, accessRights: updated.accessRights || [] } : item))
       );
-      setMessage('Access rights updated successfully.');
+      if (String(user?.id) === String(selectedUserId)) {
+        await refreshSession();
+        setMessage('Access rights updated and session refreshed.');
+      } else {
+        setMessage('Access rights updated successfully. User must re-login for changes to apply.');
+      }
     } catch (saveError) {
       setError(saveError.message);
     } finally {

@@ -10,11 +10,16 @@ export function AuthProvider({ children }) {
   useEffect(() => {
     const bootstrap = async () => {
       try {
-        const currentUser = await authService.me();
+        const currentUser = await authService.refreshSession();
         setUser(currentUser);
       } catch {
-        sessionStorage.removeItem('bms_user');
-        setUser(null);
+        try {
+          const currentUser = await authService.me();
+          setUser(currentUser);
+        } catch {
+          sessionStorage.removeItem('bms_user');
+          setUser(null);
+        }
       } finally {
         setLoading(false);
       }
@@ -44,6 +49,12 @@ export function AuthProvider({ children }) {
     return updatedUser;
   };
 
+  const refreshSession = async () => {
+    const updatedUser = await authService.refreshSession();
+    setUser(updatedUser);
+    return updatedUser;
+  };
+
   const value = useMemo(
     () => ({
       user,
@@ -52,6 +63,7 @@ export function AuthProvider({ children }) {
       login,
       logout,
       updateProfile,
+      refreshSession,
     }),
     [user, loading]
   );

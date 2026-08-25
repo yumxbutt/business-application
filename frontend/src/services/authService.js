@@ -9,6 +9,12 @@ export const authService = {
     return data;
   },
 
+  async refreshSession() {
+    const data = await httpClient.post('/auth/refresh-session', {});
+    sessionStorage.setItem(USER_KEY, JSON.stringify(data.user));
+    return data.user;
+  },
+
   async me() {
     const data = await httpClient.get('/auth/me');
     sessionStorage.setItem(USER_KEY, JSON.stringify(data.user));
@@ -24,6 +30,16 @@ export const authService = {
     const data = await httpClient.put('/auth/profile', payload);
     sessionStorage.setItem(USER_KEY, JSON.stringify(data.user));
     return data.user;
+  },
+
+  async getLoginActivities(filters = {}) {
+    const params = new URLSearchParams();
+    if (filters.page) params.set('page', String(filters.page));
+    if (filters.limit) params.set('limit', String(filters.limit));
+    if (filters.status) params.set('status', filters.status);
+    if (filters.username) params.set('username', filters.username);
+    const query = params.toString();
+    return httpClient.get(`/auth/login-activities${query ? `?${query}` : ''}`);
   },
 
   getUser() {

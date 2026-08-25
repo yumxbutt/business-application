@@ -343,6 +343,18 @@ const getCashBook = async (branchId, { startDate, endDate } = {}) => {
 
   const closingBalance = daysArr.length ? daysArr[daysArr.length - 1].closingBalance : periodOpening;
 
+  // Single-day cash report with no movements still shows opening = closing.
+  if (startDate && endDate && startDate === endDate && daysArr.length === 0) {
+    daysArr.push({
+      date: startDate,
+      openingBalance: periodOpening,
+      totalDebit: 0,
+      totalCredit: 0,
+      closingBalance: periodOpening,
+      entries: [],
+    });
+  }
+
   return {
     openingBalance: periodOpening,
     totalDebit: Number(overallTotalDebit.toFixed(2)),

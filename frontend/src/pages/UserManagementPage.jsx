@@ -7,6 +7,7 @@ import ToggleSwitch from '../components/ui/ToggleSwitch';
 import { userService } from '../services/userService';
 import { branchService } from '../services/branchService';
 import { useAuth } from '../context/AuthContext';
+import { useAccess } from '../hooks/useAccess';
 
 const roleOptions = [
   { value: 'branch_admin', label: 'Branch Admin' },
@@ -25,6 +26,10 @@ const defaultForm = {
 
 export default function UserManagementPage() {
   const { user } = useAuth();
+  const { has } = useAccess();
+  const canCreateUser = has('users:create');
+  const canUpdateUser = has('users:update');
+  const canToggleUserStatus = has('users:status');
   const [users, setUsers] = useState([]);
   const [branches, setBranches] = useState([]);
   const [selectedBranch, setSelectedBranch] = useState('');
@@ -194,9 +199,11 @@ export default function UserManagementPage() {
         title="User Management"
         subtitle="Manage branch users and access rights"
         actions={
-          <Button type="button" variant="primary" onClick={openCreateModal}>
-            Add New User
-          </Button>
+          canCreateUser ? (
+            <Button type="button" variant="primary" onClick={openCreateModal}>
+              Add New User
+            </Button>
+          ) : null
         }
       >
         {canManageAllBranches ? (
@@ -273,16 +280,22 @@ export default function UserManagementPage() {
                   <td>{(record.accessRights || []).join(', ') || '-'}</td>
                   <td>{record.branch?.name || 'All'}</td>
                   <td>
-                    <ToggleSwitch
-                      checked={record.isActive}
-                      onChange={() => onToggleStatus(record)}
-                      label={`Toggle status for ${record.fullName}`}
-                    />
+                    {canToggleUserStatus ? (
+                      <ToggleSwitch
+                        checked={record.isActive}
+                        onChange={() => onToggleStatus(record)}
+                        label={`Toggle status for ${record.fullName}`}
+                      />
+                    ) : (
+                      record.isActive ? 'Active' : 'Inactive'
+                    )}
                   </td>
                   <td className="text-right">
-                    <button type="button" className="table-action-button" onClick={() => onEdit(record)}>
-                      Edit
-                    </button>
+                    {canUpdateUser ? (
+                      <button type="button" className="table-action-button" onClick={() => onEdit(record)}>
+                        Edit
+                      </button>
+                    ) : null}
                   </td>
                 </tr>
               ))}

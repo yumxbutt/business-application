@@ -22,12 +22,12 @@ const InventoryBatch = sequelize.define(
     purchaseId: {
       type: DataTypes.INTEGER,
       field: 'purchase_id',
-      allowNull: false,
+      allowNull: true,
     },
     purchaseItemId: {
       type: DataTypes.INTEGER,
       field: 'purchase_item_id',
-      allowNull: false,
+      allowNull: true,
     },
     receivedDate: {
       type: DataTypes.DATEONLY,

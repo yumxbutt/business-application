@@ -4,7 +4,7 @@ import { useAuth } from '../context/AuthContext';
 import Select from '../ui-kit/Select';
 import { productService } from '../services/productService';
 import { inventoryService } from '../services/inventoryService';
-import { downloadCsv, exportPdfViaPrint } from '../utils/export';
+import { downloadCsv, downloadPdfFromPrintArea } from '../utils/export';
 
 const formatDate = (value) => {
   if (!value) return '–';
@@ -41,6 +41,7 @@ export default function ProductHistoryPage() {
   const [searched, setSearched] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [exportingPdf, setExportingPdf] = useState(false);
 
   useEffect(() => {
     const loadMeta = async () => {
@@ -117,6 +118,20 @@ export default function ProductHistoryPage() {
     downloadCsv(rowsForExport, fileName);
   };
 
+  const exportPdf = async () => {
+    if (!searched) return;
+    setExportingPdf(true);
+    setError('');
+    try {
+      const fileName = `product-history-${fileSafe(selectedBranchName)}-${filters.startDate || 'from'}-to-${filters.endDate || 'to'}.pdf`;
+      await downloadPdfFromPrintArea(fileName, '.print-area');
+    } catch (exportError) {
+      setError(exportError.message || 'PDF export failed');
+    } finally {
+      setExportingPdf(false);
+    }
+  };
+
   return (
     <div className="dashboard-stack">
       <PageCard
@@ -127,8 +142,8 @@ export default function ProductHistoryPage() {
             <button type="button" className="secondary-action-button" onClick={exportExcel} disabled={!searched}>
               Export Excel
             </button>
-            <button type="button" className="secondary-action-button" onClick={exportPdfViaPrint}>
-              Export PDF
+            <button type="button" className="secondary-action-button" onClick={exportPdf} disabled={!searched || exportingPdf}>
+              {exportingPdf ? 'Exporting PDF…' : 'Export PDF'}
             </button>
           </div>
         }

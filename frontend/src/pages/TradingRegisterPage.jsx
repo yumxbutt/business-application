@@ -3,7 +3,7 @@ import PageCard from '../components/ui/PageCard';
 import { useAuth } from '../context/AuthContext';
 import { productService } from '../services/productService';
 import { ledgerService } from '../services/ledgerService';
-import { downloadCsv } from '../utils/export';
+import { downloadCsv, downloadPdfFromPrintArea } from '../utils/export';
 import { settingsService } from '../services/settingsService';
 import { openPrintWindow, fmtPrintDate, fmtNum } from '../utils/printHelper';
 
@@ -46,6 +46,7 @@ export default function TradingRegisterPage() {
   const [loading, setLoading] = useState(false);
   const [savingOpening, setSavingOpening] = useState(false);
   const [error, setError] = useState('');
+  const [exportingPdf, setExportingPdf] = useState(false);
   const [company, setCompany] = useState({});
 
   const selectedBranchName =
@@ -158,6 +159,20 @@ export default function TradingRegisterPage() {
     });
   };
 
+  const exportPdf = async () => {
+    if (!report) return;
+    setExportingPdf(true);
+    setError('');
+    try {
+      const fileName = `trading-ledger-${fileSafe(selectedBranchName)}-${filters.startDate || 'from'}-to-${filters.endDate || 'to'}.pdf`;
+      await downloadPdfFromPrintArea(fileName, '.print-area');
+    } catch (exportError) {
+      setError(exportError.message || 'PDF export failed');
+    } finally {
+      setExportingPdf(false);
+    }
+  };
+
   const exportExcel = () => {
     if (!report) return;
 
@@ -234,6 +249,9 @@ export default function TradingRegisterPage() {
           <div className="inline-actions no-print">
             <button type="button" className="secondary-action-button" onClick={exportExcel} disabled={!report}>
               Export Excel
+            </button>
+            <button type="button" className="secondary-action-button" onClick={exportPdf} disabled={!report || exportingPdf}>
+              {exportingPdf ? 'Exporting PDF…' : 'Export PDF'}
             </button>
             <button type="button" className="secondary-action-button" onClick={handlePrint} disabled={!report}>
               &#128424; Print

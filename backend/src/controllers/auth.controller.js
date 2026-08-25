@@ -4,8 +4,10 @@ const {
   createAccessToken,
   getCookieOptions,
   recordLoginActivity,
+  listLoginActivities,
   sanitizeUser,
   updateOwnProfile,
+  refreshSession,
 } = require('../services/auth.service');
 
 const authCookieName = process.env.AUTH_COOKIE_NAME || 'bms_auth';
@@ -55,9 +57,11 @@ const me = async (req, res) => {
 };
 
 const logout = async (req, res) => {
-  res.clearCookie(authCookieName, {
-    path: '/',
-  });
+  const clearOpts = { path: '/' };
+  if (process.env.COOKIE_DOMAIN) {
+    clearOpts.domain = process.env.COOKIE_DOMAIN;
+  }
+  res.clearCookie(authCookieName, clearOpts);
   return res.status(200).json({ message: 'Logout successful' });
 };
 
@@ -93,9 +97,48 @@ const updateProfile = async (req, res, next) => {
   }
 };
 
+const getLoginActivities = async (req, res, next) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
+
+    const result = await listLoginActivities({
+      page: req.query.page,
+      limit: req.query.limit,
+      status: req.query.status,
+      username: req.query.username,
+    });
+
+    return res.status(200).json(result);
+  } catch (error) {
+    return next(error);
+  }
+};
+
+const refreshSessionHandler = async (req, res, next) => {
+  try {
+    const user = await refreshSession(req.user.id);
+    const accessToken = createAccessToken(user);
+    res.cookie(authCookieName, accessToken, getCookieOptions());
+    return res.status(200).json({
+      message: 'Session refreshed',
+      user: sanitizeUser(user),
+    });
+  } catch (error) {
+    if (error.message.includes('not found')) {
+      return res.status(404).json({ message: error.message });
+    }
+    return next(error);
+  }
+};
+
 module.exports = {
   login,
   me,
   logout,
   updateProfile,
+  getLoginActivities,
+  refreshSessionHandler,
 };

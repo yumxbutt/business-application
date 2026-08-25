@@ -10,6 +10,24 @@ const CompanySettings = sequelize.define('CompanySettings', {
   email: { type: DataTypes.STRING(150), allowNull: true },
   logoUrl: { type: DataTypes.TEXT, field: 'logo_url', allowNull: true },
   footerNote: { type: DataTypes.TEXT, field: 'footer_note', allowNull: true },
+  businessMode: {
+    type: DataTypes.STRING(20),
+    field: 'business_mode',
+    allowNull: false,
+    defaultValue: 'retail',
+  },
+  cashTaxRate: {
+    type: DataTypes.DECIMAL(8, 4),
+    field: 'cash_tax_rate',
+    allowNull: false,
+    defaultValue: 0,
+  },
+  cardTaxRate: {
+    type: DataTypes.DECIMAL(8, 4),
+    field: 'card_tax_rate',
+    allowNull: false,
+    defaultValue: 0,
+  },
   updatedById: { type: DataTypes.INTEGER, field: 'updated_by', allowNull: true },
 }, { tableName: 'company_settings', underscored: true, timestamps: true, createdAt: 'created_at', updatedAt: 'updated_at' });
 

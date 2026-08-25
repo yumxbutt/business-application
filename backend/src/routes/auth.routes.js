@@ -1,7 +1,9 @@
 const express = require('express');
-const { body } = require('express-validator');
-const { login, me, logout, updateProfile } = require('../controllers/auth.controller');
+const { body, query } = require('express-validator');
+const { login, me, logout, updateProfile, getLoginActivities, refreshSessionHandler } = require('../controllers/auth.controller');
 const { authenticate } = require('../middleware/auth.middleware');
+const { authorize } = require('../middleware/authorize.middleware');
+const { ROLES } = require('../constants/roles');
 
 const router = express.Router();
 
@@ -14,7 +16,21 @@ router.post(
   login
 );
 
+router.get(
+  '/login-activities',
+  authenticate,
+  authorize(ROLES.MAIN_ADMIN),
+  [
+    query('page').optional().isInt({ min: 1 }),
+    query('limit').optional().isInt({ min: 1, max: 100 }),
+    query('status').optional().isIn(['success', 'failed']),
+    query('username').optional().isString().trim(),
+  ],
+  getLoginActivities
+);
+
 router.get('/me', authenticate, me);
+router.post('/refresh-session', authenticate, refreshSessionHandler);
 router.post('/logout', authenticate, logout);
 router.put(
   '/profile',

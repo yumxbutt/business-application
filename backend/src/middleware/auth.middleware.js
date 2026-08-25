@@ -1,5 +1,22 @@
 const jwt = require('jsonwebtoken');
 
+const normalizeAccessRights = (value) => {
+  if (Array.isArray(value)) return value.filter(Boolean).map((v) => String(v));
+  if (!value) return [];
+  if (typeof value === 'string') {
+    const raw = value.trim();
+    if (!raw) return [];
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed.filter(Boolean).map((v) => String(v));
+    } catch {
+      // fall through
+    }
+    return raw.split(',').map((v) => v.trim()).filter(Boolean);
+  }
+  return [];
+};
+
 const authenticate = (req, res, next) => {
   const authHeader = req.headers.authorization;
   const authCookieName = process.env.AUTH_COOKIE_NAME || 'bms_auth';
@@ -23,7 +40,7 @@ const authenticate = (req, res, next) => {
       fullName: payload.fullName,
       role: payload.role,
       branchId: payload.branchId,
-      accessRights: payload.accessRights || [],
+      accessRights: normalizeAccessRights(payload.accessRights),
     };
 
     return next();

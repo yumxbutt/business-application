@@ -17,6 +17,8 @@ const allowedOrigins = (process.env.CORS_ORIGIN || '')
 // Allow any localhost/127.0.0.1 origin (all ports) in development
 const isLocalhostOrigin = (origin) => /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
 
+app.set('trust proxy', 1);
+
 // Middleware
 app.use(
   cors({
@@ -51,8 +53,11 @@ app.use('/api/sales', require('./routes/sales.routes'));
 app.use('/api/purchases', require('./routes/purchase.routes'));
 app.use('/api/inventory', require('./routes/inventory.routes'));
 app.use('/api/financials', require('./routes/financial.routes'));
+app.use('/api/expenses', require('./routes/expense.routes'));
 app.use('/api/settings', require('./routes/settings.routes'));
 app.use('/api/payment-accounts', require('./routes/payment-account.routes'));
+app.use('/api/account-heads', require('./routes/account-head.routes'));
+app.use('/api/reports', require('./routes/reports.routes'));
 
 // Error handling middleware
 app.use((err, req, res, next) => {
@@ -66,7 +71,8 @@ app.use((req, res) => {
 });
 
 // Start server
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 5001;
+const HOST = process.env.HOST || '0.0.0.0';
 connectDB().then(async (connected) => {
   if (!connected) {
     console.error('Startup aborted: please check database credentials in backend/.env');
@@ -74,7 +80,7 @@ connectDB().then(async (connected) => {
   }
 
   await bootstrapDatabase();
-  app.listen(PORT, () => {
-    console.log(`Server is running on port ${PORT}`);
+  app.listen(PORT, HOST, () => {
+    console.log(`Server is running on http://${HOST}:${PORT}`);
   });
 });

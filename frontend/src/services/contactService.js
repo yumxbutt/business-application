@@ -21,6 +21,14 @@ export const contactService = {
     return data.customers || [];
   },
 
+  async getDefaultCustomer(branchId) {
+    const params = new URLSearchParams();
+    if (branchId) params.set('branchId', String(branchId));
+    const query = params.toString();
+    const data = await httpClient.get(`/contacts/default-customer${query ? `?${query}` : ''}`);
+    return data.customer;
+  },
+
   async getSuppliers(branchId) {
     const params = new URLSearchParams();
     if (branchId) params.set('branchId', String(branchId));

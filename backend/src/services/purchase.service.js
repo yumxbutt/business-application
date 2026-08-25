@@ -23,6 +23,51 @@ const {
 } = require('../models');
 
 const toNumber = (value) => Number(value || 0);
+const roundMoney = (value) => Number((toNumber(value)).toFixed(2));
+
+const parseAdditionalExpenses = (raw) => {
+  const source = Array.isArray(raw)
+    ? raw
+    : (() => {
+        if (!raw) return [];
+        if (typeof raw === 'string') {
+          try {
+            const parsed = JSON.parse(raw);
+            return Array.isArray(parsed) ? parsed : [];
+          } catch {
+            return [];
+          }
+        }
+        return [];
+      })();
+
+  const normalized = source
+    .map((entry, idx) => {
+      const amount = toNumber(entry?.amount);
+      if (!Number.isFinite(amount) || amount < 0) {
+        throw new Error('Additional expense amount must be 0 or more');
+      }
+      if (amount <= 0) return null;
+
+      const name = String(entry?.name || '').trim() || `Expense ${idx + 1}`;
+      return { name, amount: Number(amount.toFixed(2)) };
+    })
+    .filter(Boolean);
+
+  const total = normalized.reduce((sum, entry) => sum + toNumber(entry.amount), 0);
+  return {
+    rows: normalized,
+    total: Number(total.toFixed(2)),
+  };
+};
+
+const enrichPurchaseExpenses = (purchase) => {
+  if (!purchase) return purchase;
+  const parsed = parseAdditionalExpenses(purchase.additionalExpenses);
+  purchase.dataValues.additionalExpenses = parsed.rows;
+  purchase.dataValues.additionalExpensesTotal = toNumber(purchase.additionalExpensesTotal || parsed.total);
+  return purchase;
+};
 
 const parseBranchId = (actor, branchIdInput) => {
   if (actor.role === 'main_admin') {
@@ -91,22 +136,66 @@ const resolveItemUnit = async (item, transaction) => {
   };
 };
 
-const computeTotals = (items, discount = 0, paidAmount = 0) => {
-  const subTotal = items.reduce((sum, item) => {
+const computeTotals = (items, discount = 0, paidAmount = 0, additionalExpensesTotal = 0) => {
+  const subTotalRaw = items.reduce((sum, item) => {
     const quantity = toNumber(item.quantity);
     const unitPrice = toNumber(item.unitPrice);
     return sum + quantity * unitPrice;
   }, 0);
 
-  const safeDiscount = toNumber(discount);
-  const safePaid = toNumber(paidAmount);
-  const totalAmount = subTotal - safeDiscount;
-  const dueAmount = totalAmount - safePaid;
+  const subTotal = roundMoney(subTotalRaw);
+  const safeDiscount = roundMoney(discount);
+  const safePaid = roundMoney(paidAmount);
+  const safeAdditionalExpensesTotal = roundMoney(additionalExpensesTotal);
+  const totalAmount = roundMoney(subTotal + safeAdditionalExpensesTotal - safeDiscount);
+  const dueAmount = roundMoney(totalAmount - safePaid);
 
-  if (totalAmount < 0) throw new Error('Discount cannot exceed subtotal');
+  if (totalAmount < 0) throw new Error('Discount cannot exceed subtotal plus additional expenses');
   if (safePaid > totalAmount) throw new Error('Paid amount cannot exceed total amount');
 
-  return { subTotal, discount: safeDiscount, totalAmount, paidAmount: safePaid, dueAmount };
+  return {
+    subTotal,
+    discount: safeDiscount,
+    additionalExpensesTotal: safeAdditionalExpensesTotal,
+    totalAmount,
+    paidAmount: safePaid,
+    dueAmount,
+  };
+};
+
+const normalizePaymentSplits = (payments = [], paidAmount = 0, cashHeadId = null) => {
+  const expected = roundMoney(paidAmount);
+  let splits = (Array.isArray(payments) ? payments : [])
+    .map((p) => ({
+      ...p,
+      amount: roundMoney(p.amount),
+    }))
+    .filter((p) => p.amount > 0);
+
+  if (expected <= 0) return [];
+
+  if (splits.length === 0) {
+    return [{ paymentAccountId: null, accountHeadId: cashHeadId, amount: expected }];
+  }
+
+  const currentTotal = roundMoney(splits.reduce((sum, p) => sum + p.amount, 0));
+  const diff = roundMoney(expected - currentTotal);
+
+  if (Math.abs(diff) >= 0.01) {
+    const targetIndex = splits.length - 1;
+    const adjusted = roundMoney(splits[targetIndex].amount + diff);
+    if (adjusted <= 0) {
+      throw new Error('Payment split total must match paid amount exactly');
+    }
+    splits[targetIndex] = { ...splits[targetIndex], amount: adjusted };
+  }
+
+  const normalizedTotal = roundMoney(splits.reduce((sum, p) => sum + p.amount, 0));
+  if (normalizedTotal !== expected) {
+    throw new Error('Payment split total must match paid amount exactly');
+  }
+
+  return splits;
 };
 
 const listPurchases = async ({ branchId, filters = {} }) => {
@@ -182,7 +271,7 @@ const getPurchase = async ({ purchaseId, actor }) => {
   });
   purchase.dataValues.contactBalance = contactBal ? Number(contactBal.payableBalance || 0) : null;
 
-  return purchase;
+  return enrichPurchaseExpenses(purchase);
 };
 
 const getPurchaseReturn = async ({ returnId, actor }) => {
@@ -273,10 +362,7 @@ const postLedgerForPurchase = async ({
     const paymentReferenceNo = `${purchase.billNo}-PMT`;
 
     // Resolve payment splits — fallback to single cash entry if none provided
-    let resolvedSplits = payments.filter((p) => toNumber(p.amount) > 0);
-    if (resolvedSplits.length === 0) {
-      resolvedSplits = [{ paymentAccountId: null, accountHeadId: cashHead.id, amount: purchase.paidAmount }];
-    }
+    const resolvedSplits = normalizePaymentSplits(payments, purchase.paidAmount, cashHead.id);
 
     const accountIds = resolvedSplits.map((p) => p.paymentAccountId).filter(Boolean);
     const accountRows = accountIds.length
@@ -307,7 +393,7 @@ const postLedgerForPurchase = async ({
     for (const split of resolvedSplits) {
       const acc = split.paymentAccountId ? accountMap.get(Number(split.paymentAccountId)) : null;
       const headId = acc?.accountHeadId || split.accountHeadId || cashHead.id;
-      const splitAmount = toNumber(split.amount);
+      const splitAmount = roundMoney(split.amount);
 
       await LedgerEntry.bulkCreate(
         [
@@ -423,6 +509,7 @@ const createPurchase = async ({ payload, actor }) => {
     purchaseDate,
     discount = 0,
     paidAmount = 0,
+    additionalExpenses = [],
     payments = [],
     items = [],
   } = payload;
@@ -441,7 +528,8 @@ const createPurchase = async ({ payload, actor }) => {
     const duplicate = await Purchase.findOne({ where: { branchId, billNo }, transaction: txn });
     if (duplicate) throw new Error('Bill number already exists for this branch');
 
-    const totals = computeTotals(items, discount, paidAmount);
+    const additionalExpenseMeta = parseAdditionalExpenses(additionalExpenses);
+    const totals = computeTotals(items, discount, paidAmount, additionalExpenseMeta.total);
 
     const purchase = await Purchase.create(
       {
@@ -451,6 +539,8 @@ const createPurchase = async ({ payload, actor }) => {
         purchaseDate,
         subTotal: totals.subTotal,
         discount: totals.discount,
+        additionalExpensesTotal: totals.additionalExpensesTotal,
+        additionalExpenses: JSON.stringify(additionalExpenseMeta.rows),
         totalAmount: totals.totalAmount,
         paidAmount: totals.paidAmount,
         dueAmount: totals.dueAmount,
@@ -758,6 +848,7 @@ const updatePurchase = async ({ purchaseId, payload, actor }) => {
     purchaseDate,
     discount = 0,
     paidAmount = 0,
+    additionalExpenses = [],
     payments = [],
     items = [],
   } = payload;
@@ -805,7 +896,8 @@ const updatePurchase = async ({ purchaseId, payload, actor }) => {
     });
     if (duplicate) throw new Error('Bill number already exists for this branch');
 
-    const totals = computeTotals(items, discount, paidAmount);
+    const additionalExpenseMeta = parseAdditionalExpenses(additionalExpenses);
+    const totals = computeTotals(items, discount, paidAmount, additionalExpenseMeta.total);
 
     // Pre-resolve unit conversion for all new items (async, so must be done before delta calc)
     const resolvedNewItems = await Promise.all(items.map((item) => resolveItemUnit(item, txn)));
@@ -890,6 +982,8 @@ const updatePurchase = async ({ purchaseId, payload, actor }) => {
     purchase.purchaseDate = effectiveDate;
     purchase.subTotal = totals.subTotal;
     purchase.discount = totals.discount;
+    purchase.additionalExpensesTotal = totals.additionalExpensesTotal;
+    purchase.additionalExpenses = JSON.stringify(additionalExpenseMeta.rows);
     purchase.totalAmount = totals.totalAmount;
     purchase.paidAmount = totals.paidAmount;
     purchase.dueAmount = totals.dueAmount;

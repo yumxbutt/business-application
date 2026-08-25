@@ -106,6 +106,26 @@ const getCustomers = async (req, res) => {
   }
 };
 
+const getDefaultCustomer = async (req, res) => {
+  const branchId = req.user.role === 'main_admin'
+    ? (req.query.branchId ? Number(req.query.branchId) : undefined)
+    : Number(req.user.branchId);
+
+  if (!branchId) {
+    return res.status(400).json({ error: 'branchId is required' });
+  }
+
+  try {
+    const customer = await contactService.getDefaultCustomer(branchId);
+    if (!customer) {
+      return res.status(404).json({ error: 'Default walk-in customer not found for this branch' });
+    }
+    return res.json({ customer });
+  } catch (err) {
+    return mapError(err, res);
+  }
+};
+
 /**
  * GET /api/contacts/suppliers
  */
@@ -128,5 +148,6 @@ module.exports = {
   updateContact,
   changeStatus,
   getCustomers,
+  getDefaultCustomer,
   getSuppliers,
 };

@@ -11,6 +11,7 @@
     "seed:auth": "node src/scripts/seed-auth-data.js",
     "seed:transactions": "node src/scripts/seed-transaction-data.js",
     "seed:purchase-demo": "node src/scripts/seed-purchase-demo-data.js",
+    "seed:pos-demo": "node src/scripts/seed-pos-demo-data.js",
     "test": "jest"
   },
   "keywords": ["business", "management", "sales", "inventory"],

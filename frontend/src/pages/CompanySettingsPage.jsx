@@ -1,6 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import PageCard from '../components/ui/PageCard';
 import { settingsService } from '../services/settingsService';
+import {
+  BUSINESS_MODE_RETAIL,
+  BUSINESS_MODE_WHOLESALE,
+  BUSINESS_MODE_RESTAURANT,
+  normalizeBusinessMode,
+} from '../config/posDefaults';
 
 const emptyForm = () => ({
   companyName: '',
@@ -10,6 +16,9 @@ const emptyForm = () => ({
   email: '',
   logoUrl: '',
   footerNote: '',
+  businessMode: BUSINESS_MODE_RETAIL,
+  cashTaxRate: '0',
+  cardTaxRate: '0',
 });
 
 export default function CompanySettingsPage() {
@@ -32,6 +41,9 @@ export default function CompanySettingsPage() {
           email: data.email || '',
           logoUrl: data.logoUrl || '',
           footerNote: data.footerNote || '',
+          businessMode: normalizeBusinessMode(data.businessMode),
+          cashTaxRate: String(data.cashTaxRate ?? 0),
+          cardTaxRate: String(data.cardTaxRate ?? 0),
         });
       })
       .catch(() => {})
@@ -50,7 +62,11 @@ export default function CompanySettingsPage() {
     e.preventDefault();
     setSaving(true); setSuccess(''); setError('');
     try {
-      await settingsService.saveCompanySettings(form);
+      await settingsService.saveCompanySettings({
+        ...form,
+        cashTaxRate: Number(form.cashTaxRate || 0),
+        cardTaxRate: Number(form.cardTaxRate || 0),
+      });
       setSuccess('Company settings saved successfully.');
       successTimer.current = setTimeout(() => setSuccess(''), 4000);
     } catch (err) {
@@ -72,11 +88,140 @@ export default function CompanySettingsPage() {
 
   return (
     <div className="dashboard-stack">
-      <PageCard title="Company Settings" subtitle="Branding information used on printed vouchers and reports">
+      <PageCard title="Company Settings" subtitle="Branding and POS business mode used across the app">
         {loading ? (
           <p className="view-note">Loading settings…</p>
         ) : (
           <form onSubmit={handleSubmit} style={{ maxWidth: 560 }}>
+            <div style={{ marginBottom: 20 }}>
+              <span style={{ display: 'block', fontWeight: 600, fontSize: '0.875rem', marginBottom: 8, color: '#374151' }}>
+                Business / POS mode
+              </span>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10 }}>
+                <label
+                  style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 4,
+                    padding: '12px 14px',
+                    borderRadius: 8,
+                    border: form.businessMode === BUSINESS_MODE_RETAIL ? '2px solid #2563eb' : '1px solid #d1d5db',
+                    background: form.businessMode === BUSINESS_MODE_RETAIL ? '#eff6ff' : '#fff',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <span style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 700, color: '#111827' }}>
+                    <input
+                      type="radio"
+                      name="businessMode"
+                      value={BUSINESS_MODE_RETAIL}
+                      checked={form.businessMode === BUSINESS_MODE_RETAIL}
+                      onChange={handleChange}
+                    />
+                    Retail / Counter
+                  </span>
+                  <span style={{ fontSize: '0.78rem', color: '#6b7280', paddingLeft: 22 }}>
+                    Walk-in shop POS — tile catalog, full pay by default.
+                  </span>
+                </label>
+                <label
+                  style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 4,
+                    padding: '12px 14px',
+                    borderRadius: 8,
+                    border: form.businessMode === BUSINESS_MODE_RESTAURANT ? '2px solid #2563eb' : '1px solid #d1d5db',
+                    background: form.businessMode === BUSINESS_MODE_RESTAURANT ? '#eff6ff' : '#fff',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <span style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 700, color: '#111827' }}>
+                    <input
+                      type="radio"
+                      name="businessMode"
+                      value={BUSINESS_MODE_RESTAURANT}
+                      checked={form.businessMode === BUSINESS_MODE_RESTAURANT}
+                      onChange={handleChange}
+                    />
+                    Restaurant
+                  </span>
+                  <span style={{ fontSize: '0.78rem', color: '#6b7280', paddingLeft: 22 }}>
+                    Table / hold running orders + kitchen token print per product.
+                  </span>
+                </label>
+                <label
+                  style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 4,
+                    padding: '12px 14px',
+                    borderRadius: 8,
+                    border: form.businessMode === BUSINESS_MODE_WHOLESALE ? '2px solid #2563eb' : '1px solid #d1d5db',
+                    background: form.businessMode === BUSINESS_MODE_WHOLESALE ? '#eff6ff' : '#fff',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <span style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 700, color: '#111827' }}>
+                    <input
+                      type="radio"
+                      name="businessMode"
+                      value={BUSINESS_MODE_WHOLESALE}
+                      checked={form.businessMode === BUSINESS_MODE_WHOLESALE}
+                      onChange={handleChange}
+                    />
+                    Wholesale / Trade
+                  </span>
+                  <span style={{ fontSize: '0.78rem', color: '#6b7280', paddingLeft: 22 }}>
+                    Dense catalog, editable rates, partial payment / due.
+                  </span>
+                </label>
+              </div>
+            </div>
+
+            <div style={{ marginBottom: 20 }}>
+              <span style={{ display: 'block', fontWeight: 600, fontSize: '0.875rem', marginBottom: 8, color: '#374151' }}>
+                Tax setup (%)
+              </span>
+              <p style={{ margin: '0 0 10px', fontSize: '0.78rem', color: '#6b7280' }}>
+                Used on sales invoices / POS when Cash Tax or Card Tax is selected. Choose No Tax on the invoice to skip tax.
+              </p>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <span style={{ fontSize: '0.8rem', fontWeight: 600, color: '#374151' }}>Cash Tax %</span>
+                  <input
+                    name="cashTaxRate"
+                    type="number"
+                    min="0"
+                    max="100"
+                    step="0.01"
+                    value={form.cashTaxRate}
+                    onChange={handleChange}
+                    style={{
+                      width: '100%', padding: '8px 10px', fontSize: '0.875rem',
+                      border: '1px solid #d1d5db', borderRadius: 6, color: '#111827',
+                    }}
+                  />
+                </label>
+                <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <span style={{ fontSize: '0.8rem', fontWeight: 600, color: '#374151' }}>Card Tax %</span>
+                  <input
+                    name="cardTaxRate"
+                    type="number"
+                    min="0"
+                    max="100"
+                    step="0.01"
+                    value={form.cardTaxRate}
+                    onChange={handleChange}
+                    style={{
+                      width: '100%', padding: '8px 10px', fontSize: '0.875rem',
+                      border: '1px solid #d1d5db', borderRadius: 6, color: '#111827',
+                    }}
+                  />
+                </label>
+              </div>
+            </div>
+
             {fields.map((f) => (
               <div key={f.name} style={{ marginBottom: 16 }}>
                 <label
@@ -116,7 +261,6 @@ export default function CompanySettingsPage() {
               </div>
             ))}
 
-            {/* Logo preview */}
             {form.logoUrl && (
               <div style={{ marginBottom: 16 }}>
                 <p style={{ fontSize: '0.8rem', color: '#6b7280', marginBottom: 6 }}>Logo Preview:</p>

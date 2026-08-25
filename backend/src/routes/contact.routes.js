@@ -2,6 +2,7 @@ const express = require('express');
 const { body, query } = require('express-validator');
 const { authenticate } = require('../middleware/auth.middleware');
 const { authorize } = require('../middleware/authorize.middleware');
+const { requireAccess } = require('../middleware/access.middleware');
 const { ROLES } = require('../constants/roles');
 const {
   listContacts,
@@ -9,6 +10,7 @@ const {
   updateContact,
   changeStatus,
   getCustomers,
+  getDefaultCustomer,
   getSuppliers,
 } = require('../controllers/contact.controller');
 
@@ -16,11 +18,11 @@ const router = express.Router();
 const managers = [ROLES.MAIN_ADMIN, ROLES.BRANCH_ADMIN];
 const allRoles = [ROLES.MAIN_ADMIN, ROLES.BRANCH_ADMIN, ROLES.STAFF];
 
-// GET /api/contacts
 router.get(
   '/',
   authenticate,
   authorize(...allRoles),
+  requireAccess('financial:contacts:read'),
   [
     query('branchId').optional().isInt({ min: 1 }),
     query('search').optional().isString().trim(),
@@ -30,11 +32,11 @@ router.get(
   listContacts
 );
 
-// POST /api/contacts
 router.post(
   '/',
   authenticate,
-  authorize(...managers),
+  authorize(...allRoles),
+  requireAccess('financial:contacts:create'),
   [
     body('branchId').optional().isInt({ min: 1 }),
     body('applyToAllBranches').optional().isBoolean(),
@@ -52,11 +54,11 @@ router.post(
   createContact
 );
 
-// PUT /api/contacts/:id
 router.put(
   '/:id',
   authenticate,
   authorize(...managers),
+  requireAccess('financial:contacts:create'),
   [
     body('branchId').optional().isInt({ min: 1 }),
     body('applyToAllBranches').optional().isBoolean(),
@@ -71,29 +73,38 @@ router.put(
   updateContact
 );
 
-// PATCH /api/contacts/:id/status
 router.patch(
   '/:id/status',
   authenticate,
   authorize(...managers),
+  requireAccess('financial:contacts:create'),
   [body('isActive').isBoolean().withMessage('isActive must be a boolean')],
   changeStatus
 );
 
-// GET /api/contacts/list/customers
 router.get(
   '/list/customers',
   authenticate,
   authorize(...allRoles),
+  requireAccess('financial:contacts:read'),
   [query('branchId').optional().isInt({ min: 1 })],
   getCustomers
 );
 
-// GET /api/contacts/list/suppliers
+router.get(
+  '/default-customer',
+  authenticate,
+  authorize(...allRoles),
+  requireAccess('financial:contacts:read'),
+  [query('branchId').optional().isInt({ min: 1 })],
+  getDefaultCustomer
+);
+
 router.get(
   '/list/suppliers',
   authenticate,
   authorize(...allRoles),
+  requireAccess('financial:contacts:read'),
   [query('branchId').optional().isInt({ min: 1 })],
   getSuppliers
 );

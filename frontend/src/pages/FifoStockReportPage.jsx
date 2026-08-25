@@ -3,6 +3,7 @@ import PageCard from '../components/ui/PageCard';
 import { productService } from '../services/productService';
 import Select from '../ui-kit/Select';
 import { inventoryService } from '../services/inventoryService';
+import { downloadPdfFromPrintArea } from '../utils/export';
 
 const formatDate = (value) => {
   if (!value) return '–';
@@ -29,6 +30,7 @@ export default function FifoStockReportPage() {
   const [searched, setSearched] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [exportingPdf, setExportingPdf] = useState(false);
 
   useEffect(() => {
     const loadMeta = async () => {
@@ -82,11 +84,31 @@ export default function FifoStockReportPage() {
     }
   };
 
+  const exportPdf = async () => {
+    if (!searched) return;
+    setExportingPdf(true);
+    setError('');
+    try {
+      await downloadPdfFromPrintArea('fifo-stock-report.pdf', '.print-area');
+    } catch (exportError) {
+      setError(exportError.message || 'PDF export failed');
+    } finally {
+      setExportingPdf(false);
+    }
+  };
+
   return (
     <div className="dashboard-stack">
       <PageCard
         title="FIFO Stock Verification"
         subtitle="Check FIFO batches against itemized purchase returns"
+        actions={
+          searched ? (
+            <button type="button" className="secondary-action-button no-print" onClick={exportPdf} disabled={exportingPdf}>
+              {exportingPdf ? 'Exporting PDF…' : 'Export PDF'}
+            </button>
+          ) : null
+        }
       >
         {error ? <p className="error-text">{error}</p> : null}
 
@@ -149,6 +171,7 @@ export default function FifoStockReportPage() {
         </div>
 
         {searched ? (
+          <div className="print-area">
           <>
             <div className="totals-panel" style={{ maxWidth: 420 }}>
               <div className="totals-row">
@@ -169,7 +192,7 @@ export default function FifoStockReportPage() {
               </div>
             </div>
 
-            <div className="table-wrap table-wrap--full print-area">
+            <div className="table-wrap table-wrap--full">
               <table className="data-table">
                 <thead>
                   <tr>
@@ -215,6 +238,7 @@ export default function FifoStockReportPage() {
               </table>
             </div>
           </>
+          </div>
         ) : null}
       </PageCard>
     </div>

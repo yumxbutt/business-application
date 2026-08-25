@@ -4,32 +4,42 @@
 .ui-root{font-family:var(--ui-font);color:var(--text)}
 
 /* Buttons */
-.btn{display:inline-flex;align-items:center;justify-content:center;gap:0.55rem;padding:0.6rem 0.95rem;border-radius:calc(var(--radius-sm) - 2px);border:1px solid transparent;font-weight:800;cursor:pointer;transition:transform var(--transition-fast),box-shadow var(--transition-fast),background var(--transition-fast),border-color var(--transition-fast);line-height:1}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:0.55rem;padding:0.55rem 1.05rem;border-radius:var(--radius-button,999px);border:1px solid transparent;font-weight:500;cursor:pointer;transition:transform var(--transition-fast),box-shadow var(--transition-fast),background var(--transition-fast),border-color var(--transition-fast);line-height:1.2}
 .btn:disabled{opacity:0.6;cursor:not-allowed}
 .btn--primary{
-  background:
-    radial-gradient(circle at 30% 20%, rgba(255,255,255,0.22), transparent 55%),
-    linear-gradient(135deg, var(--accent), #818cf8);
+  background: linear-gradient(135deg, #2563eb, #0ea5e9);
   color:var(--text-inverse);
-  box-shadow:var(--shadow-soft);
+  box-shadow:0 10px 22px rgba(14, 165, 233, 0.18);
   border-color:transparent
 }
-.btn--primary:hover{transform:translateY(-1px);filter:saturate(1.05)}
-.btn--secondary{background:rgba(255,255,255,0.7);backdrop-filter:blur(8px);color:var(--text);border:1px solid var(--border-subtle);box-shadow:0 10px 22px rgba(15,23,42,0.06)}
+.btn--primary:hover{transform:translateY(-1px);filter:brightness(1.04)}
+.btn--secondary{background:rgba(255,255,255,0.86);backdrop-filter:blur(10px);color:var(--text);border:1px solid var(--border-subtle);box-shadow:var(--shadow-soft)}
 .btn--ghost{background:transparent;color:var(--muted);border:none}
-.btn--icon{padding:0.35rem 0.5rem;border-radius:8px}
+.btn--icon{padding:0.35rem 0.5rem;border-radius:var(--radius-button,999px)}
 
 /* Map existing classnames to new look (backwards compat) */
-.primary-action-button{display:inline-flex;padding:0.5rem 0.9rem;align-items:center;justify-content:center;border-radius:var(--radius-sm);background:var(--accent);color:var(--text-inverse);font-weight:700;cursor:pointer}
-.secondary-action-button{display:inline-flex;padding:0.45rem 0.8rem;align-items:center;border-radius:var(--radius-sm);background:transparent;border:1px solid var(--border-subtle);color:var(--text);cursor:pointer}
-.table-action-button{padding:0.35rem 0.55rem;border-radius:6px;background:transparent;border:1px solid var(--border-lighter);cursor:pointer}
-.table-action-button--danger{background:transparent;border:1px solid rgba(220,38,38,0.12);color:var(--danger)}
-.table-action-button--danger:hover{background:rgba(220,38,38,0.03)}
+.primary-action-button{display:inline-flex;padding:0.5rem 1.05rem;align-items:center;justify-content:center;border-radius:var(--radius-button,999px);background:linear-gradient(135deg,#2563eb,#0ea5e9);color:var(--text-inverse);font-weight:500;cursor:pointer;border:0;box-shadow:0 10px 22px rgba(14,165,233,0.18)}
+.secondary-action-button{display:inline-flex;padding:0.45rem 1rem;align-items:center;border-radius:var(--radius-button,999px);background:rgba(255,255,255,0.86);border:1px solid var(--border-subtle);color:var(--text);cursor:pointer;font-weight:500;backdrop-filter:blur(8px)}
+.table-action-button{padding:0.35rem 0.75rem;border-radius:var(--radius-button,999px);background:transparent;border:1px solid var(--border-lighter);cursor:pointer;font-weight:500}
 
-/* Cards */
-.page-card{background:var(--card-bg);border-radius:var(--radius-md);padding:1rem;box-shadow:var(--shadow-soft);border:1px solid var(--border-lighter)}
-.page-card__header{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
-.page-card__header h2{margin:0}
+/* Cards — keep in sync with index.css dashboard glass surfaces */
+.page-card{
+  background:rgba(255,255,255,0.84);
+  backdrop-filter:blur(12px);
+  border-radius:var(--radius-lg,20px);
+  padding:1.35rem 1.5rem;
+  box-shadow:var(--shadow-soft);
+  border:1px solid rgba(148,163,184,0.16)
+}
+.page-card__header{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  margin-bottom:18px;
+  padding-bottom:14px;
+  border-bottom:1px solid var(--border-subtle)
+}
+.page-card__header h2{margin:0;font-weight:600;letter-spacing:-0.02em}
 .page-card__body{padding-top:6px}
 
 /* Inputs & selects */
@@ -49,15 +59,15 @@
 /* Table tweaks */
 .data-table{width:100%;border-collapse:collapse;font-size:0.89rem;background:transparent}
 .data-table th,.data-table td{padding:0.75rem 0.6rem;border-bottom:1px solid var(--border-lighter)}
-.data-table thead th{color:var(--muted);font-weight:700;text-align:left}
+.data-table thead th{color:var(--muted);font-weight:600;text-align:left}
 .empty-state-cell{color:var(--muted);text-align:center;padding:2rem}
 .table-wrap{overflow:auto}
 
 /* Totals panel */
-.totals-panel{background:var(--surface);padding:0.8rem;border-radius:10px;border:1px solid var(--border-lighter);width:320px}
+.totals-panel{background:rgba(255,255,255,0.9);padding:0.9rem 1rem;border-radius:16px;border:1px solid var(--border-lighter);width:320px;box-shadow:var(--shadow-soft)}
 .totals-row{display:flex;justify-content:space-between;padding:4px 0;color:var(--muted)}
-.totals-row--total{font-weight:800;color:var(--text);font-size:1.06rem}
-.due-row{color:var(--danger);font-weight:700}
+.totals-row--total{font-weight:600;color:var(--text);font-size:1.06rem}
+.due-row{color:var(--danger);font-weight:600}
 
 /* Utility */
 .text-right{text-align:right}
@@ -65,9 +75,9 @@
 .inline-actions--end{margin-left:auto}
 
 /* product search dropdown */
-.product-search-dropdown{position:absolute;left:0;right:0;top:100%;background:var(--surface);border:1px solid var(--border-subtle);z-index:999;border-radius:8px;padding:6px;margin-top:8px;max-height:260px;overflow:auto;box-shadow:var(--shadow-deep)}
-.product-search-item{padding:0.6rem 0.7rem;display:flex;justify-content:space-between;align-items:center;cursor:pointer}
-.product-search-item:hover{background:rgba(0,0,0,0.02)}
+.product-search-dropdown{position:absolute;left:0;right:0;top:100%;background:var(--surface);border:1px solid var(--border-subtle);z-index:999;border-radius:14px;padding:6px;margin-top:8px;max-height:260px;overflow:auto;box-shadow:var(--shadow-deep)}
+.product-search-item{padding:0.6rem 0.7rem;display:flex;justify-content:space-between;align-items:center;cursor:pointer;border-radius:10px}
+.product-search-item:hover{background:rgba(14,165,233,0.06)}
 .product-search-sku{color:var(--muted);font-size:0.85rem}
 
 /* Responsive helpers */

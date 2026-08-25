@@ -2,6 +2,7 @@ const express = require('express');
 const { body, query, param } = require('express-validator');
 const { authenticate } = require('../middleware/auth.middleware');
 const { authorize } = require('../middleware/authorize.middleware');
+const { requireAccess } = require('../middleware/access.middleware');
 const { ROLES } = require('../constants/roles');
 const {
   listAccounts,
@@ -16,11 +17,11 @@ const router = express.Router();
 const allRoles = [ROLES.MAIN_ADMIN, ROLES.BRANCH_ADMIN, ROLES.STAFF];
 const adminRoles = [ROLES.MAIN_ADMIN, ROLES.BRANCH_ADMIN];
 
-// GET /api/payment-accounts — list all accounts (admin view)
 router.get(
   '/',
   authenticate,
   authorize(...allRoles),
+  requireAccess('financial:payment-accounts:read'),
   [
     query('branchId').optional().isInt({ min: 1 }),
     query('accountType').optional().isIn(['cash', 'bank']),
@@ -29,20 +30,20 @@ router.get(
   listAccounts
 );
 
-// GET /api/payment-accounts/for-branch — returns active accounts for a branch (used in PaymentSelector)
 router.get(
   '/for-branch',
   authenticate,
   authorize(...allRoles),
+  requireAccess('financial:payment-accounts:read'),
   [query('branchId').optional().isInt({ min: 1 })],
   getAccountsForBranch
 );
 
-// POST /api/payment-accounts — create
 router.post(
   '/',
   authenticate,
   authorize(...adminRoles),
+  requireAccess('financial:payment-accounts:manage'),
   [
     body('name').notEmpty().withMessage('Account name is required'),
     body('accountType').isIn(['cash', 'bank']).withMessage('accountType must be cash or bank'),
@@ -54,11 +55,11 @@ router.post(
   createAccount
 );
 
-// PUT /api/payment-accounts/:id — update
 router.put(
   '/:id',
   authenticate,
   authorize(...adminRoles),
+  requireAccess('financial:payment-accounts:manage'),
   [
     param('id').isInt({ min: 1 }),
     body('name').optional().notEmpty(),
@@ -69,20 +70,20 @@ router.put(
   updateAccount
 );
 
-// PATCH /api/payment-accounts/:id/toggle — activate / deactivate
 router.patch(
   '/:id/toggle',
   authenticate,
   authorize(...adminRoles),
+  requireAccess('financial:payment-accounts:manage'),
   [param('id').isInt({ min: 1 })],
   toggleAccount
 );
 
-// GET /api/payment-accounts/:id/statement — account statement for reconciliation
 router.get(
   '/:id/statement',
   authenticate,
   authorize(...allRoles),
+  requireAccess('financial:payment-accounts:read'),
   [
     param('id').isInt({ min: 1 }),
     query('startDate').optional().isISO8601(),

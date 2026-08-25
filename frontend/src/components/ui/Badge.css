@@ -2,7 +2,7 @@
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  font-weight: 700;
+  font-weight: 500;
   letter-spacing: 0.01em;
   border-radius: var(--radius-pill, 999px);
   white-space: nowrap;
@@ -31,8 +31,8 @@
 
 /* Tones */
 .badge--default {
-  background: rgba(99, 102, 241, 0.1);
-  color: #4f46e5;
+  background: rgba(14, 165, 233, 0.12);
+  color: #0369a1;
 }
 
 .badge--success {

@@ -32,6 +32,8 @@ const { PaymentTransactionSplit } = require('./payment-transaction-split.model')
 const { Expense } = require('./expense.model');
 const { BranchOpeningBalance } = require('./branch-opening-balance.model');
 const { CompanySettings } = require('./company-settings.model');
+const { StockTransfer } = require('./stock-transfer.model');
+const { StockTransferItem } = require('./stock-transfer-item.model');
 
 Branch.hasMany(User, { foreignKey: 'branch_id', as: 'users' });
 User.belongsTo(Branch, { foreignKey: 'branch_id', as: 'branch' });
@@ -248,6 +250,24 @@ Expense.belongsTo(AccountHead, { foreignKey: 'account_head_id', as: 'accountHead
 User.hasMany(Expense, { foreignKey: 'created_by', as: 'expenses' });
 Expense.belongsTo(User, { foreignKey: 'created_by', as: 'createdBy' });
 
+// Stock transfer associations
+Branch.hasMany(StockTransfer, { foreignKey: 'from_branch_id', as: 'outgoingTransfers' });
+Branch.hasMany(StockTransfer, { foreignKey: 'to_branch_id', as: 'incomingTransfers' });
+StockTransfer.belongsTo(Branch, { foreignKey: 'from_branch_id', as: 'fromBranch' });
+StockTransfer.belongsTo(Branch, { foreignKey: 'to_branch_id', as: 'toBranch' });
+
+User.hasMany(StockTransfer, { foreignKey: 'created_by', as: 'stockTransfers' });
+StockTransfer.belongsTo(User, { foreignKey: 'created_by', as: 'createdBy' });
+
+StockTransfer.hasMany(StockTransferItem, { foreignKey: 'stock_transfer_id', as: 'items' });
+StockTransferItem.belongsTo(StockTransfer, { foreignKey: 'stock_transfer_id', as: 'stockTransfer' });
+
+Product.hasMany(StockTransferItem, { foreignKey: 'product_id', as: 'transferItems' });
+StockTransferItem.belongsTo(Product, { foreignKey: 'product_id', as: 'product' });
+
+InventoryBatch.hasMany(StockTransferItem, { foreignKey: 'destination_batch_id', as: 'transferItems' });
+StockTransferItem.belongsTo(InventoryBatch, { foreignKey: 'destination_batch_id', as: 'destinationBatch' });
+
 // Branch opening balance (one per branch, for trading register)
 Branch.hasOne(BranchOpeningBalance, { foreignKey: 'branch_id', as: 'openingBalance' });
 BranchOpeningBalance.belongsTo(Branch, { foreignKey: 'branch_id', as: 'branch' });
@@ -288,4 +308,6 @@ module.exports = {
   Expense,
   BranchOpeningBalance,
   CompanySettings,
+  StockTransfer,
+  StockTransferItem,
 };

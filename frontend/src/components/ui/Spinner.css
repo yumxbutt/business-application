@@ -4,7 +4,7 @@
 
 .spinner {
   display: inline-flex;
-  color: var(--color-primary, #6366f1);
+  color: var(--color-primary, #0ea5e9);
 }
 
 .spinner svg {

@@ -2,6 +2,7 @@ const express = require('express');
 const { body, query } = require('express-validator');
 const { authenticate } = require('../middleware/auth.middleware');
 const { authorize } = require('../middleware/authorize.middleware');
+const { requireAccess } = require('../middleware/access.middleware');
 const { ROLES } = require('../constants/roles');
 const { createCashVoucher, listCashVouchers } = require('../controllers/financial.controller');
 
@@ -12,6 +13,7 @@ router.get(
   '/cash-vouchers',
   authenticate,
   authorize(...allRoles),
+  requireAccess('financial:vouchers:read'),
   [
     query('branchId').optional().isInt({ min: 1 }),
     query('transactionType').optional().isIn(['receipt', 'payment', 'all']),
@@ -25,6 +27,7 @@ router.post(
   '/cash-vouchers',
   authenticate,
   authorize(...allRoles),
+  requireAccess('financial:vouchers:create'),
   [
     body('branchId').optional().isInt({ min: 1 }),
     body('contactId').notEmpty().isInt({ min: 1 }).withMessage('contactId is required'),
@@ -37,8 +40,11 @@ router.post(
   createCashVoucher
 );
 
-router.get('/', (req, res) => {
-  res.json({ message: 'Financials API is active' });
+router.get('/', authenticate, authorize(...allRoles), (req, res) => {
+  res.json({
+    message: 'Financials API',
+    endpoints: ['/api/financials/cash-vouchers'],
+  });
 });
 
 module.exports = router;

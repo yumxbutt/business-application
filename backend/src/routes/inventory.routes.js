@@ -2,8 +2,15 @@ const express = require('express');
 const { query, body } = require('express-validator');
 const { authenticate } = require('../middleware/auth.middleware');
 const { authorize } = require('../middleware/authorize.middleware');
+const { requireAccess } = require('../middleware/access.middleware');
 const { ROLES } = require('../constants/roles');
 const { getStock, adjustStock, setStock, getFifoReport, getProductHistory } = require('../controllers/inventory.controller');
+const {
+  listTransfers,
+  getTransfer,
+  createTransfer,
+  cancelTransfer,
+} = require('../controllers/stock-transfer.controller');
 
 const router = express.Router();
 
@@ -15,6 +22,7 @@ router.get(
   '/stock',
   authenticate,
   authorize(...allRoles),
+  requireAccess('inventory:read'),
   [
     query('branchId').notEmpty().isInt({ min: 1 }).withMessage('branchId is required'),
     query('mode').optional().isIn(['all', 'unit']),
@@ -29,6 +37,7 @@ router.get(
   '/fifo-report',
   authenticate,
   authorize(...allRoles),
+  requireAccess('inventory:read'),
   [
     query('branchId').notEmpty().isInt({ min: 1 }).withMessage('branchId is required'),
     query('productId').optional().isInt({ min: 1 }),
@@ -44,6 +53,7 @@ router.get(
   '/product-history',
   authenticate,
   authorize(...allRoles),
+  requireAccess('inventory:read'),
   [
     query('branchId').notEmpty().isInt({ min: 1 }).withMessage('branchId is required'),
     query('productId').optional().isInt({ min: 1 }),
@@ -58,6 +68,7 @@ router.post(
   '/adjustments',
   authenticate,
   authorize(...managers),
+  requireAccess('inventory:adjust'),
   [
     body('branchId').notEmpty().isInt({ min: 1 }),
     body('productId').notEmpty().isInt({ min: 1 }),
@@ -72,12 +83,62 @@ router.post(
   '/set',
   authenticate,
   authorize(...managers),
+  requireAccess('inventory:adjust'),
   [
     body('branchId').notEmpty().isInt({ min: 1 }),
     body('productId').notEmpty().isInt({ min: 1 }),
     body('quantity').notEmpty().isFloat({ min: 0 }).withMessage('quantity must be >= 0'),
   ],
   setStock
+);
+
+router.get(
+  '/transfers',
+  authenticate,
+  authorize(...allRoles),
+  requireAccess('inventory:read'),
+  [
+    query('branchId').optional().isInt({ min: 1 }),
+    query('status').optional().isIn(['posted', 'cancelled', 'all']),
+    query('startDate').optional().isISO8601(),
+    query('endDate').optional().isISO8601(),
+  ],
+  listTransfers
+);
+
+router.get(
+  '/transfers/:id',
+  authenticate,
+  authorize(...allRoles),
+  requireAccess('inventory:read'),
+  getTransfer
+);
+
+router.post(
+  '/transfers',
+  authenticate,
+  authorize(...managers, ROLES.STAFF),
+  requireAccess('inventory:transfer'),
+  [
+    body('fromBranchId').optional().isInt({ min: 1 }),
+    body('toBranchId').notEmpty().isInt({ min: 1 }).withMessage('toBranchId is required'),
+    body('transferDate').notEmpty().isISO8601().withMessage('transferDate is required'),
+    body('transferNo').optional().isString().trim(),
+    body('remarks').optional().isString().trim(),
+    body('items').isArray({ min: 1 }).withMessage('At least one item is required'),
+    body('items.*.productId').notEmpty().isInt({ min: 1 }),
+    body('items.*.quantity').notEmpty().isFloat({ gt: 0 }),
+    body('items.*.notes').optional().isString().trim(),
+  ],
+  createTransfer
+);
+
+router.patch(
+  '/transfers/:id/cancel',
+  authenticate,
+  authorize(...managers, ROLES.STAFF),
+  requireAccess('inventory:transfer'),
+  cancelTransfer
 );
 
 module.exports = router;

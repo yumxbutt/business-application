@@ -1,5 +1,6 @@
 const { Op } = require('sequelize');
 const { Contact, Branch, ContactBalance } = require('../models');
+const { WALK_IN_CUSTOMER_NAME } = require('../constants/contacts');
 
 const withBalanceInclude = {
   model: ContactBalance,
@@ -29,6 +30,17 @@ const ensureManagerRole = (actor) => {
   if (!['main_admin', 'branch_admin'].includes(actor.role)) {
     throw new Error('Not allowed to manage contacts');
   }
+};
+
+const ensureCanCreateContact = (actor, recordType) => {
+  if (['main_admin', 'branch_admin'].includes(actor.role)) return;
+  if (actor.role === 'staff') {
+    if (recordType !== 'customer') {
+      throw new Error('Staff can only create customers');
+    }
+    return;
+  }
+  throw new Error('Not allowed to manage contacts');
 };
 
 const normalizeText = (value) => {
@@ -99,8 +111,6 @@ const getContact = async (contactId) => {
 };
 
 const createContact = async (payload, actor) => {
-  ensureManagerRole(actor);
-
   const { name, phone, address, recordType, openingBalance, branchId, applyToAllBranches, branchIds } = payload;
 
   if (!name || !name.trim()) throw new Error('Contact name is required');
@@ -108,6 +118,7 @@ const createContact = async (payload, actor) => {
     throw new Error('Invalid record type');
   }
 
+  ensureCanCreateContact(actor, recordType);
 
   // Check for duplicate name across all branches
   const existing = await Contact.findOne({ where: { name: normalizeText(name) } });
@@ -123,6 +134,12 @@ const createContact = async (payload, actor) => {
     openingBalance: parseFloat(openingBalance) || 0,
     isActive: true,
   });
+
+  // Staff: always own branch, customer only
+  if (actor.role === 'staff') {
+    if (!actor.branchId) throw new Error('Branch is required for contact');
+    return createForBranch(actor.branchId);
+  }
 
   // If main admin requested apply to all branches, create for every branch
   if (applyToAllBranches && actor.role === 'main_admin') {
@@ -225,6 +242,14 @@ const changeContactStatus = async (contactId, isActive, actor) => {
   return contact;
 };
 
+const sortCustomersForPos = (contacts) => {
+  return contacts.sort((a, b) => {
+    if (a.name === WALK_IN_CUSTOMER_NAME) return -1;
+    if (b.name === WALK_IN_CUSTOMER_NAME) return 1;
+    return String(a.name).localeCompare(String(b.name));
+  });
+};
+
 const getCustomers = async (branchId) => {
   const contacts = await Contact.findAll({
     where: {
@@ -236,7 +261,21 @@ const getCustomers = async (branchId) => {
     order: [['name', 'ASC']],
   });
 
-  return contacts.map(withDefaultBalance);
+  return sortCustomersForPos(contacts.map(withDefaultBalance));
+};
+
+const getDefaultCustomer = async (branchId) => {
+  if (!branchId) return null;
+  const contact = await Contact.findOne({
+    where: {
+      branchId: Number(branchId),
+      name: WALK_IN_CUSTOMER_NAME,
+      recordType: { [Op.in]: ['customer', 'both'] },
+      isActive: true,
+    },
+    include: [withBalanceInclude],
+  });
+  return contact ? withDefaultBalance(contact) : null;
 };
 
 const getSuppliers = async (branchId) => {
@@ -270,6 +309,8 @@ module.exports = {
   updateContact,
   changeContactStatus,
   getCustomers,
+  getDefaultCustomer,
   getSuppliers,
   getAll,
+  WALK_IN_CUSTOMER_NAME,
 };

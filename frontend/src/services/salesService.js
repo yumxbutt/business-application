@@ -24,6 +24,11 @@ export const salesService = {
     return data.sale;
   },
 
+  async updateSale(id, payload) {
+    const data = await httpClient.put(`/sales/${id}`, payload);
+    return data.sale;
+  },
+
   async getReturns(filters = {}) {
     const params = new URLSearchParams();
     if (filters.saleId) params.set('saleId', String(filters.saleId));

@@ -1,18 +1,19 @@
 .stat-card {
-  background: var(--color-surface, #fff);
-  border: 1px solid rgba(15, 23, 42, 0.07);
-  border-radius: var(--radius-md, 14px);
+  background: var(--color-surface, rgba(255, 255, 255, 0.82));
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: var(--radius-md, 16px);
   padding: 16px 18px;
   display: flex;
   flex-direction: column;
   gap: 5px;
-  box-shadow: 0 2px 12px rgba(15, 23, 42, 0.04);
+  box-shadow: var(--shadow-sm, 0 8px 24px rgba(15, 23, 42, 0.04));
   transition: box-shadow 0.18s ease, transform 0.18s ease;
 }
 
 .stat-card:hover {
-  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.09);
-  transform: translateY(-1px);
+  box-shadow: var(--shadow-md, 0 16px 32px rgba(15, 23, 42, 0.08));
+  transform: translateY(-2px);
 }
 
 .stat-card__header {
@@ -24,10 +25,9 @@
 
 .stat-card__label {
   font-size: 11px;
-  font-weight: 600;
+  font-weight: 500;
   color: var(--color-text-soft, #64748b);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.04em;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -40,11 +40,11 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 8px;
+  border-radius: 10px;
   font-size: 14px;
 }
 
-.stat-card__icon--default { background: rgba(99, 102, 241, 0.1); color: #6366f1; }
+.stat-card__icon--default { background: rgba(14, 165, 233, 0.12); color: #0284c7; }
 .stat-card__icon--success  { background: rgba(22, 163, 74, 0.1);  color: #16a34a; }
 .stat-card__icon--danger   { background: rgba(239, 68, 68, 0.1);  color: #dc2626; }
 .stat-card__icon--warning  { background: rgba(245, 158, 11, 0.1); color: #b45309; }
@@ -52,8 +52,8 @@
 
 .stat-card__value {
   font-size: 20px;
-  font-weight: 800;
-  color: var(--color-text, #0f172a);
+  font-weight: 600;
+  color: var(--color-text, #0b1220);
   line-height: 1.2;
   letter-spacing: -0.01em;
   word-break: break-all;
@@ -62,17 +62,16 @@
 
 .stat-card__meta {
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 500;
   color: var(--color-text-soft, #64748b);
   margin-top: 2px;
 }
 
-/* Top accent bar per tone */
 .stat-card--success { border-top: 3px solid #16a34a; }
 .stat-card--danger  { border-top: 3px solid #ef4444; }
 .stat-card--warning { border-top: 3px solid #f59e0b; }
 .stat-card--info    { border-top: 3px solid #0ea5e9; }
-.stat-card--default { border-top: 3px solid #6366f1; }
+.stat-card--default { border-top: 3px solid #0ea5e9; }
 
 .stat-card__skeleton {
   height: 24px;

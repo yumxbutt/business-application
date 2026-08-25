@@ -2,6 +2,7 @@ const express = require('express');
 const { body, query, param } = require('express-validator');
 const { authenticate } = require('../middleware/auth.middleware');
 const { authorize } = require('../middleware/authorize.middleware');
+const { requireAccess } = require('../middleware/access.middleware');
 const { ROLES } = require('../constants/roles');
 const {
   listSales,
@@ -25,6 +26,7 @@ router.get(
   '/returns',
   authenticate,
   authorize(...allRoles),
+  requireAccess('sales:read'),
   [
     query('branchId').optional().isInt({ min: 1 }),
     query('saleId').optional().isInt({ min: 1 }),
@@ -37,7 +39,8 @@ router.get(
 router.post(
   '/returns',
   authenticate,
-  authorize(...managers),
+  authorize(...allRoles),
+  requireAccess('sales:return'),
   [
     body('branchId').optional().isInt({ min: 1 }),
     body('saleIdReference').isInt({ min: 1 }).withMessage('saleIdReference is required'),
@@ -56,6 +59,7 @@ router.get(
   '/returns/:id',
   authenticate,
   authorize(...allRoles),
+  requireAccess('sales:read'),
   [param('id').isInt({ min: 1 })],
   getSaleReturn
 );
@@ -63,7 +67,8 @@ router.get(
 router.delete(
   '/returns/:id',
   authenticate,
-  authorize(...managers),
+  authorize(...allRoles),
+  requireAccess('sales:return'),
   [param('id').isInt({ min: 1 })],
   cancelSaleReturn
 );
@@ -71,7 +76,8 @@ router.delete(
 router.patch(
   '/returns/:id',
   authenticate,
-  authorize(...managers),
+  authorize(...allRoles),
+  requireAccess('sales:return'),
   [
     param('id').isInt({ min: 1 }),
     body('returnDate').optional().isISO8601(),
@@ -84,6 +90,7 @@ router.get(
   '/',
   authenticate,
   authorize(...allRoles),
+  requireAccess('sales:read'),
   [
     query('branchId').optional().isInt({ min: 1 }),
     query('search').optional().isString().trim(),
@@ -98,6 +105,7 @@ router.get(
   '/:id',
   authenticate,
   authorize(...allRoles),
+  requireAccess('sales:read'),
   [param('id').isInt({ min: 1 })],
   getSale
 );
@@ -105,7 +113,8 @@ router.get(
 router.post(
   '/',
   authenticate,
-  authorize(...managers),
+  authorize(...allRoles),
+  requireAccess('sales:create'),
   [
     body('branchId').optional().isInt({ min: 1 }),
     body('contactId').isInt({ min: 1 }).withMessage('contactId is required'),
@@ -113,6 +122,10 @@ router.post(
     body('saleDate').isISO8601().withMessage('saleDate is required'),
     body('discount').optional().isFloat({ min: 0 }),
     body('paidAmount').optional().isFloat({ min: 0 }),
+    body('taxMode').optional().isIn(['cash_tax', 'card_tax', 'no_tax']),
+    body('additionalExpenses').optional().isArray(),
+    body('additionalExpenses.*.name').optional({ nullable: true }).isString().trim(),
+    body('additionalExpenses.*.amount').optional({ nullable: true }).isFloat({ min: 0 }),
     body('items').isArray({ min: 1 }).withMessage('At least one item is required'),
     body('items.*.productId').isInt({ min: 1 }).withMessage('productId is required'),
     body('items.*.sourceBranchId').optional({ nullable: true }).isInt({ min: 1 }),
@@ -126,15 +139,33 @@ router.post(
 router.put(
   '/:id',
   authenticate,
-  authorize(...managers),
-  [param('id').isInt({ min: 1 })],
+  authorize(...allRoles),
+  requireAccess('sales:create'),
+  [
+    param('id').isInt({ min: 1 }),
+    body('contactId').optional().isInt({ min: 1 }),
+    body('invoiceNo').optional().isString().trim(),
+    body('saleDate').optional().isISO8601(),
+    body('discount').optional().isFloat({ min: 0 }),
+    body('paidAmount').optional().isFloat({ min: 0 }),
+    body('taxMode').optional().isIn(['cash_tax', 'card_tax', 'no_tax']),
+    body('additionalExpenses').optional().isArray(),
+    body('items').isArray({ min: 1 }).withMessage('At least one item is required'),
+    body('items.*.productId').isInt({ min: 1 }).withMessage('productId is required'),
+    body('items.*.sourceBranchId').optional({ nullable: true }).isInt({ min: 1 }),
+    body('items.*.quantity').optional().isFloat({ gt: 0 }),
+    body('items.*.unitQty').optional().isFloat({ gt: 0 }),
+    body('items.*.unitPrice').isFloat({ min: 0 }).withMessage('unitPrice must be 0 or more'),
+    body('items.*.notes').optional({ nullable: true }).isString(),
+  ],
   updateSale
 );
 
 router.patch(
   '/:id/cancel',
   authenticate,
-  authorize(...managers),
+  authorize(...allRoles),
+  requireAccess('sales:create'),
   [param('id').isInt({ min: 1 })],
   cancelSale
 );
@@ -142,7 +173,8 @@ router.patch(
 router.patch(
   '/:id/post',
   authenticate,
-  authorize(...managers),
+  authorize(...allRoles),
+  requireAccess('sales:create'),
   [param('id').isInt({ min: 1 })],
   repostSale
 );

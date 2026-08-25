@@ -311,11 +311,12 @@ const searchProducts = async ({ q = '', limit = 10 } = {}) => {
     where[Op.or] = [
       { name: { [Op.like]: `%${q.trim()}%` } },
       { sku: { [Op.like]: `%${q.trim()}%` } },
+      { barcode: { [Op.like]: `%${q.trim()}%` } },
     ];
   }
   return Product.findAll({
     where,
-    attributes: ['id', 'name', 'sku', 'purchasePrice', 'salePrice'],
+    attributes: ['id', 'name', 'sku', 'barcode', 'purchasePrice', 'salePrice'],
     include: [
       {
         model: ProductUnit,

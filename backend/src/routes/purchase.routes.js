@@ -2,6 +2,7 @@ const express = require('express');
 const { body, query, param } = require('express-validator');
 const { authenticate } = require('../middleware/auth.middleware');
 const { authorize } = require('../middleware/authorize.middleware');
+const { requireAccess } = require('../middleware/access.middleware');
 const { ROLES } = require('../constants/roles');
 const {
   listPurchases,
@@ -17,13 +18,13 @@ const {
 } = require('../controllers/purchase.controller');
 
 const router = express.Router();
-const managers = [ROLES.MAIN_ADMIN, ROLES.BRANCH_ADMIN];
 const allRoles = [ROLES.MAIN_ADMIN, ROLES.BRANCH_ADMIN, ROLES.STAFF];
 
 router.get(
   '/',
   authenticate,
   authorize(...allRoles),
+  requireAccess('purchase:read'),
   [
     query('branchId').optional().isInt({ min: 1 }),
     query('search').optional().isString().trim(),
@@ -38,6 +39,7 @@ router.get(
   '/returns',
   authenticate,
   authorize(...allRoles),
+  requireAccess('purchase:read'),
   [
     query('branchId').optional().isInt({ min: 1 }),
     query('purchaseId').optional().isInt({ min: 1 }),
@@ -50,7 +52,8 @@ router.get(
 router.post(
   '/returns',
   authenticate,
-  authorize(...managers),
+  authorize(...allRoles),
+  requireAccess('purchase:return'),
   [
     body('branchId').optional().isInt({ min: 1 }),
     body('purchaseIdReference').isInt({ min: 1 }).withMessage('purchaseIdReference is required'),
@@ -71,6 +74,7 @@ router.get(
   '/returns/:id',
   authenticate,
   authorize(...allRoles),
+  requireAccess('purchase:read'),
   [param('id').isInt({ min: 1 })],
   getPurchaseReturn
 );
@@ -78,7 +82,8 @@ router.get(
 router.delete(
   '/returns/:id',
   authenticate,
-  authorize(...managers),
+  authorize(...allRoles),
+  requireAccess('purchase:return'),
   [param('id').isInt({ min: 1 })],
   cancelPurchaseReturn
 );
@@ -86,7 +91,8 @@ router.delete(
 router.patch(
   '/returns/:id',
   authenticate,
-  authorize(...managers),
+  authorize(...allRoles),
+  requireAccess('purchase:return'),
   [
     param('id').isInt({ min: 1 }),
     body('returnDate').optional().isISO8601(),
@@ -99,6 +105,7 @@ router.get(
   '/:id',
   authenticate,
   authorize(...allRoles),
+  requireAccess('purchase:read'),
   [param('id').isInt({ min: 1 })],
   getPurchase
 );
@@ -106,7 +113,8 @@ router.get(
 router.put(
   '/:id',
   authenticate,
-  authorize(...managers),
+  authorize(...allRoles),
+  requireAccess('purchase:create'),
   [
     param('id').isInt({ min: 1 }),
     body('contactId').isInt({ min: 1 }).withMessage('contactId is required'),
@@ -114,6 +122,9 @@ router.put(
     body('purchaseDate').isISO8601().withMessage('purchaseDate is required'),
     body('discount').optional().isFloat({ min: 0 }),
     body('paidAmount').optional().isFloat({ min: 0 }),
+    body('additionalExpenses').optional().isArray(),
+    body('additionalExpenses.*.name').optional({ nullable: true }).isString().trim(),
+    body('additionalExpenses.*.amount').optional({ nullable: true }).isFloat({ min: 0 }),
     body('items').isArray({ min: 1 }).withMessage('At least one item is required'),
     body('items.*.productId').isInt({ min: 1 }).withMessage('productId is required'),
     body('items.*.quantity').isFloat({ gt: 0 }).withMessage('quantity must be greater than 0'),
@@ -127,7 +138,8 @@ router.put(
 router.patch(
   '/:id/cancel',
   authenticate,
-  authorize(...managers),
+  authorize(...allRoles),
+  requireAccess('purchase:create'),
   [param('id').isInt({ min: 1 })],
   cancelPurchase
 );
@@ -135,7 +147,8 @@ router.patch(
 router.post(
   '/',
   authenticate,
-  authorize(...managers),
+  authorize(...allRoles),
+  requireAccess('purchase:create'),
   [
     body('branchId').optional().isInt({ min: 1 }),
     body('contactId').isInt({ min: 1 }).withMessage('contactId is required'),
@@ -143,6 +156,9 @@ router.post(
     body('purchaseDate').isISO8601().withMessage('purchaseDate is required'),
     body('discount').optional().isFloat({ min: 0 }),
     body('paidAmount').optional().isFloat({ min: 0 }),
+    body('additionalExpenses').optional().isArray(),
+    body('additionalExpenses.*.name').optional({ nullable: true }).isString().trim(),
+    body('additionalExpenses.*.amount').optional({ nullable: true }).isFloat({ min: 0 }),
     body('items').isArray({ min: 1 }).withMessage('At least one item is required'),
     body('items.*.productId').isInt({ min: 1 }).withMessage('productId is required'),
     body('items.*.quantity').isFloat({ gt: 0 }).withMessage('quantity must be greater than 0'),

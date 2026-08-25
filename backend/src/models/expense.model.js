@@ -41,6 +41,10 @@ const Expense = sequelize.define(
       type: DataTypes.STRING(50),
       field: 'receipt_no',
     },
+    status: {
+      type: DataTypes.STRING(20),
+      defaultValue: 'posted',
+    },
     createdById: {
       type: DataTypes.INTEGER,
       field: 'created_by',

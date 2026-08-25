@@ -40,6 +40,15 @@ const ACCESS_RIGHTS_CATALOG = [
     ],
   },
   {
+    module: 'expenses',
+    label: 'Expenses',
+    rights: [
+      { code: 'expenses:read', label: 'View expenses' },
+      { code: 'expenses:create', label: 'Create expenses' },
+      { code: 'expenses:cancel', label: 'Cancel expenses' },
+    ],
+  },
+  {
     module: 'sales',
     label: 'Sales',
     rights: [
@@ -65,6 +74,29 @@ const ACCESS_RIGHTS_CATALOG = [
       { code: 'reports:purchase', label: 'Purchase reports' },
       { code: 'reports:profit-loss', label: 'Profit/Loss reports' },
       { code: 'reports:ledger', label: 'Ledger reports' },
+    ],
+  },
+  {
+    module: 'financial',
+    label: 'Financial & Ledger',
+    rights: [
+      { code: 'financial:contacts:read', label: 'View contacts' },
+      { code: 'financial:contacts:create', label: 'Create and edit contacts' },
+      { code: 'financial:ledger:read', label: 'View contact ledger' },
+      { code: 'financial:receivables:read', label: 'View customer balances' },
+      { code: 'financial:payables:read', label: 'View supplier balances' },
+      { code: 'financial:cashbook:read', label: 'View cash book' },
+      { code: 'financial:trading:read', label: 'View trading ledger' },
+      { code: 'financial:vouchers:read', label: 'View cash vouchers' },
+      { code: 'financial:vouchers:create', label: 'Create cash vouchers' },
+      { code: 'financial:opening-balance', label: 'Set opening balances' },
+      { code: 'financial:settings:read', label: 'View company settings' },
+      { code: 'financial:settings:update', label: 'Update company settings' },
+      { code: 'financial:payment-accounts:read', label: 'View payment accounts' },
+      { code: 'financial:payment-accounts:manage', label: 'Manage payment accounts' },
+      { code: 'financial:accounts:read', label: 'View chart of accounts' },
+      { code: 'financial:accounts:create', label: 'Create account heads' },
+      { code: 'financial:accounts:update', label: 'Edit account heads' },
     ],
   },
 ];

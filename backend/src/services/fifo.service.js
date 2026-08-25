@@ -11,7 +11,7 @@ const toNumber = (v) => Number(v || 0);
  * @returns {Promise<number>} batchId
  */
 const stockIn = async (
-  { branchId, productId, purchaseId, purchaseItemId, qty, costPrice, salePrice, receivedDate },
+  { branchId, productId, purchaseId = null, purchaseItemId = null, qty, costPrice, salePrice, receivedDate },
   t
 ) => {
   const qty4 = toNumber(qty);

@@ -48,8 +48,9 @@ export const ledgerService = {
     return data.payables || [];
   },
 
-  async getLedgerReport({ startDate, endDate } = {}) {
+  async getLedgerReport({ branchId, startDate, endDate } = {}) {
     const params = new URLSearchParams();
+    if (branchId) params.set('branchId', String(branchId));
     if (startDate) params.set('startDate', startDate);
     if (endDate) params.set('endDate', endDate);
 

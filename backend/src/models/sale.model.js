@@ -38,6 +38,16 @@ const Sale = sequelize.define(
       type: DataTypes.DECIMAL(14, 2),
       defaultValue: 0,
     },
+    additionalExpensesTotal: {
+      type: DataTypes.DECIMAL(14, 2),
+      field: 'additional_expenses_total',
+      defaultValue: 0,
+    },
+    additionalExpenses: {
+      type: DataTypes.TEXT('long'),
+      field: 'additional_expenses',
+      allowNull: true,
+    },
     totalAmount: {
       type: DataTypes.DECIMAL(14, 2),
       field: 'total_amount',
@@ -51,6 +61,24 @@ const Sale = sequelize.define(
     dueAmount: {
       type: DataTypes.DECIMAL(14, 2),
       field: 'due_amount',
+      defaultValue: 0,
+    },
+    taxMode: {
+      type: DataTypes.STRING(20),
+      field: 'tax_mode',
+      allowNull: false,
+      defaultValue: 'no_tax',
+    },
+    taxRate: {
+      type: DataTypes.DECIMAL(8, 4),
+      field: 'tax_rate',
+      allowNull: false,
+      defaultValue: 0,
+    },
+    taxAmount: {
+      type: DataTypes.DECIMAL(14, 2),
+      field: 'tax_amount',
+      allowNull: false,
       defaultValue: 0,
     },
     status: {

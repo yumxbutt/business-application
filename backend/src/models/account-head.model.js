@@ -29,6 +29,11 @@ const AccountHead = sequelize.define(
       field: 'is_active',
       defaultValue: true,
     },
+    isSystem: {
+      type: DataTypes.BOOLEAN,
+      field: 'is_system',
+      defaultValue: false,
+    },
   },
   {
     tableName: 'account_heads',

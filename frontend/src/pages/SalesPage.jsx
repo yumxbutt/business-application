@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import PageCard from '../components/ui/PageCard';
 import ModalDialog from '../components/ui/ModalDialog';
 import { Button, Input, Select } from '../ui-kit';
 import { useAuth } from '../context/AuthContext';
+import { useAccess } from '../hooks/useAccess';
 import { contactService } from '../services/contactService';
 import { productService } from '../services/productService';
 import { inventoryService } from '../services/inventoryService';
@@ -13,6 +14,15 @@ import { settingsService } from '../services/settingsService';
 import { openPrintWindow, fmtPrintDate, fmtNum } from '../utils/printHelper';
 import { getOverallStockSummary } from '../utils/stockDisplay';
 import PaymentSelector from '../components/PaymentSelector';
+import {
+  WALK_IN_CUSTOMER_NAME,
+  resolveWalkInCustomerId,
+  TAX_MODE_OPTIONS,
+  TAX_MODE_NONE,
+  normalizeTaxMode,
+  resolveTaxRate,
+  taxModeLabel,
+} from '../config/posDefaults';
 
 const defaultFilters = {
   search: '',
@@ -29,6 +39,7 @@ const defaultForm = {
   discount: '0',
   paidAmount: '0',
   branchId: '',
+  taxMode: TAX_MODE_NONE,
 };
 
 const defaultItem = {
@@ -47,6 +58,13 @@ const defaultItem = {
   notes: '',
 };
 
+const defaultAdditionalExpenses = [
+  { name: 'Loading', amount: '0' },
+  { name: 'UnLoading', amount: '0' },
+  { name: 'Freight', amount: '0' },
+  { name: 'Others', amount: '0' },
+];
+
 const toNumber = (value) => Number(value || 0);
 const fmtBal = (n) => {
   if (n === null || n === undefined || Number.isNaN(Number(n))) return '–';
@@ -64,6 +82,19 @@ const getSellableQtyInSelectedUnit = (baseQty, conversionFactor) => {
   if (factor > 1) return Math.floor(Math.max(0, qty));
   return Math.max(0, qty);
 };
+const getAdditionalExpenseRows = (record) => {
+  const raw = record?.additionalExpenses;
+  if (Array.isArray(raw)) return raw;
+  if (typeof raw === 'string') {
+    try {
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+};
 const makeInvoiceNo = () => {
   const now = new Date();
   const y = now.getFullYear();
@@ -78,7 +109,12 @@ const makeInvoiceNo = () => {
 
 export default function SalesPage({ createMode = false }) {
   const navigate = useNavigate();
+  const location = useLocation();
   const { user } = useAuth();
+  const { has } = useAccess();
+  const canCreateSale = has('sales:create');
+  const canReturnSale = has('sales:return');
+  const editIdFromNav = location.state?.editId;
   const [sales, setSales] = useState([]);
   const [customers, setCustomers] = useState([]);
   const [branches, setBranches] = useState([]);
@@ -96,11 +132,15 @@ export default function SalesPage({ createMode = false }) {
   const [createdSale, setCreatedSale] = useState(null);
   const [formData, setFormData] = useState(defaultForm);
   const [items, setItems] = useState([{ ...defaultItem }]);
+  const [additionalExpenses, setAdditionalExpenses] = useState(defaultAdditionalExpenses.map((row) => ({ ...row })));
   const [customerLedgerBalance, setCustomerLedgerBalance] = useState(null);
   const [salePayments, setSalePayments] = useState([]);
+  const [editingSaleId, setEditingSaleId] = useState(null);
+  const [autoPayEnabled, setAutoPayEnabled] = useState(true);
 
   const [itemSearch, setItemSearch] = useState([{ query: '', results: [], open: false }]);
   const searchTimers = useRef([]);
+  const productSearchRef = useRef(null);
   const defaultSourceBranchId = String(user?.role === 'main_admin' ? (formData.branchId || '') : (user?.branchId || ''));
   const selectedBranchName = useMemo(() => {
     const match = branches.find((b) => String(b.id) === String(formData.branchId));
@@ -140,19 +180,48 @@ export default function SalesPage({ createMode = false }) {
     }
   };
 
-  const resetCreateForm = useCallback(() => {
+  const resetCreateForm = useCallback(async () => {
     setError('');
     const initialBranchId = user?.role !== 'main_admin' ? String(user?.branchId || '') : '';
+    let walkInId = '';
+
+    try {
+      if (initialBranchId) {
+        const customerRows = await contactService.getCustomers(initialBranchId);
+        setCustomers(customerRows);
+        walkInId = resolveWalkInCustomerId(customerRows);
+        if (!walkInId) {
+          try {
+            const defaultCustomer = await contactService.getDefaultCustomer(initialBranchId);
+            walkInId = defaultCustomer?.id ? String(defaultCustomer.id) : '';
+          } catch {
+            walkInId = '';
+          }
+        }
+      }
+    } catch {
+      // keep form usable even if customer list fails
+    }
+
     setFormData({
       ...defaultForm,
       invoiceNo: makeInvoiceNo(),
       saleDate: new Date().toISOString().split('T')[0],
       branchId: initialBranchId,
+      contactId: walkInId,
+      paidAmount: '0',
     });
     setItems([{ ...defaultItem, sourceBranchId: initialBranchId }]);
+    setAdditionalExpenses(defaultAdditionalExpenses.map((row) => ({ ...row })));
     setItemSearch([{ query: '', results: [], open: false }]);
     setCustomerLedgerBalance(null);
     setSalePayments([]);
+    setAutoPayEnabled(Boolean(walkInId));
+    setEditingSaleId(null);
+
+    window.setTimeout(() => {
+      productSearchRef.current?.focus?.();
+    }, 80);
   }, [user?.branchId, user?.role]);
 
   useEffect(() => {
@@ -173,10 +242,39 @@ export default function SalesPage({ createMode = false }) {
   }, [createMode, resetCreateForm]);
 
   useEffect(() => {
+    if (!createMode || !editIdFromNav) return;
+    loadSaleForEdit(editIdFromNav);
+  }, [createMode, editIdFromNav]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
     if (user?.role !== 'main_admin') return;
     if (!createMode) return;
-    contactService.getCustomers(formData.branchId || undefined).then(setCustomers).catch(() => {});
-  }, [createMode, formData.branchId, user?.role]);
+
+    const loadBranchCustomers = async () => {
+      if (!formData.branchId) {
+        setCustomers([]);
+        return;
+      }
+
+      try {
+        const customerRows = await contactService.getCustomers(formData.branchId);
+        setCustomers(customerRows);
+
+        if (editingSaleId) return;
+
+        const walkInId = resolveWalkInCustomerId(customerRows);
+        setFormData((prev) => ({
+          ...prev,
+          contactId: walkInId || '',
+        }));
+        setAutoPayEnabled(Boolean(walkInId));
+      } catch {
+        setCustomers([]);
+      }
+    };
+
+    loadBranchCustomers();
+  }, [createMode, formData.branchId, user?.role, editingSaleId]);
 
   useEffect(() => {
     if (!createMode) return;
@@ -210,12 +308,148 @@ export default function SalesPage({ createMode = false }) {
       return sum + toNumber(item.quantity) * toNumber(item.unitPrice);
     }, 0);
 
+    const additionalExpensesTotal = additionalExpenses.reduce(
+      (sum, expense) => sum + toNumber(expense.amount),
+      0
+    );
     const discount = toNumber(formData.discount);
     const paidAmount = toNumber(formData.paidAmount);
-    const totalAmount = Math.max(0, subTotal - discount);
+    const taxMode = normalizeTaxMode(formData.taxMode);
+    const taxRate = resolveTaxRate(company, taxMode);
+    const taxableBase = Math.max(0, subTotal + additionalExpensesTotal - discount);
+    const taxAmount = Math.round(taxableBase * taxRate) / 100;
+    const totalAmount = Math.max(0, taxableBase + taxAmount);
     const dueAmount = Math.max(0, totalAmount - paidAmount);
-    return { subTotal, totalAmount, dueAmount };
-  }, [items, formData.discount, formData.paidAmount]);
+    return { subTotal, additionalExpensesTotal, taxMode, taxRate, taxAmount, totalAmount, dueAmount };
+  }, [items, additionalExpenses, formData.discount, formData.paidAmount, formData.taxMode, company]);
+
+  useEffect(() => {
+    if (!createMode || editingSaleId || !autoPayEnabled) return;
+    const nextPaid = String(Number(totals.totalAmount || 0).toFixed(2));
+    setFormData((prev) => {
+      if (prev.paidAmount === nextPaid) return prev;
+      return { ...prev, paidAmount: nextPaid };
+    });
+  }, [createMode, editingSaleId, autoPayEnabled, totals.totalAmount]);
+
+  const updateAdditionalExpense = (index, field, value) => {
+    setAdditionalExpenses((prev) => {
+      const next = [...prev];
+      next[index] = { ...next[index], [field]: value };
+      return next;
+    });
+  };
+
+  const addAdditionalExpense = () => {
+    setAdditionalExpenses((prev) => [...prev, { name: '', amount: '0' }]);
+  };
+
+  const removeAdditionalExpense = (index) => {
+    setAdditionalExpenses((prev) => prev.filter((_, idx) => idx !== index));
+  };
+
+  const buildAdditionalExpensesPayload = () => {
+    return additionalExpenses
+      .map((expense, idx) => {
+        const amount = toNumber(expense.amount);
+        if (amount <= 0) return null;
+        const name = String(expense.name || '').trim() || `Expense ${idx + 1}`;
+        return { name, amount };
+      })
+      .filter(Boolean);
+  };
+
+  const loadSaleForEdit = async (saleId) => {
+    setError('');
+    try {
+      const detail = await salesService.getSale(saleId);
+      if (detail.status === 'cancelled') {
+        setError('Cancelled invoices cannot be edited.');
+        navigate('/sales');
+        return;
+      }
+      setEditingSaleId(detail.id);
+      setAutoPayEnabled(false);
+      setFormData({
+        contactId: String(detail.contactId || ''),
+        invoiceNo: detail.invoiceNo || '',
+        saleDate: detail.saleDate || new Date().toISOString().split('T')[0],
+        discount: String(detail.discount || '0'),
+        paidAmount: String(detail.paidAmount || '0'),
+        branchId: String(detail.branchId || ''),
+        taxMode: normalizeTaxMode(detail.taxMode),
+      });
+      setAdditionalExpenses(
+        getAdditionalExpenseRows(detail).length
+          ? getAdditionalExpenseRows(detail).map((expense, idx) => ({
+              name: String(expense?.name || `Expense ${idx + 1}`),
+              amount: String(expense?.amount || '0'),
+            }))
+          : defaultAdditionalExpenses.map((row) => ({ ...row }))
+      );
+      setSalePayments(
+        (detail.paymentSplits || []).map((p) => ({
+          paymentAccountId: p.paymentAccountId || p.accountId,
+          accountName: p.name || p.accountName,
+          amount: Number(p.amount || 0),
+          accountType: p.accountType,
+          bankName: p.bankName,
+        }))
+      );
+
+      const itemUnitsArr = await Promise.all(
+        (detail.items || []).map(async (item) => {
+          if (!item.productId) return [];
+          try { return await productService.getProductUnits(item.productId); }
+          catch { return []; }
+        })
+      );
+
+      const mappedItems = (detail.items || []).map((item, idx) => {
+        const normalizedUnits = (itemUnitsArr[idx] || [])
+          .map((u) => ({
+            unitId: String(u.unitId || u.unit?.id || ''),
+            unitName: u.unit?.name || u.unitName || u.unit?.code || 'Unit',
+            unitCode: u.unit?.code || u.unitCode || '',
+            conversionFactor: String(toNumber(u.conversionFactor) || 1),
+            isSaleUnit: Boolean(u.isSaleUnit),
+            isBaseUnit: Boolean(u.isBaseUnit) || toNumber(u.conversionFactor) === 1,
+          }))
+          .filter((u) => u.unitId)
+          .sort((a, b) => toNumber(b.conversionFactor) - toNumber(a.conversionFactor));
+
+        const selectedUnit = normalizedUnits.find((u) => String(u.unitId) === String(item.unitId));
+        const fallbackUnit = normalizedUnits.find((u) => u.isSaleUnit) || normalizedUnits.find((u) => u.isBaseUnit) || normalizedUnits[0];
+        const chosenUnit = selectedUnit || fallbackUnit;
+        const chosenFactor = toNumber(chosenUnit?.conversionFactor) || toNumber(item.conversionFactor) || 1;
+
+        return {
+          productId: String(item.productId || ''),
+          productName: item.product?.name || '',
+          quantity: String(item.unitQty ?? item.quantity ?? '1'),
+          unitPrice: String(toNumber(item.unitPrice || 0) * chosenFactor),
+          notes: item.notes || '',
+          unitId: chosenUnit ? String(chosenUnit.unitId) : '',
+          units: normalizedUnits,
+          conversionFactor: String(chosenFactor),
+          sourceBranchId: String(item.sourceBranchId || detail.branchId || ''),
+          stockOptions: [],
+          currentBranchAvailable: null,
+          productSalePrice: '0',
+          productCostPrice: '0',
+        };
+      });
+
+      setItems(mappedItems.length ? mappedItems : [{ ...defaultItem }]);
+      setItemSearch(mappedItems.map((item) => ({
+        query: item.productName,
+        results: [],
+        open: false,
+      })));
+    } catch (err) {
+      setError(err.message);
+    }
+  };
 
   const openView = async (sale) => {
     setError('');
@@ -272,6 +506,19 @@ export default function SalesPage({ createMode = false }) {
   const onFormChange = (event) => {
     const { name, value } = event.target;
     setFormData((prev) => ({ ...prev, [name]: value }));
+
+    if (name === 'contactId') {
+      const selected = (customers || []).find((row) => String(row.id) === String(value));
+      setAutoPayEnabled(selected?.name === WALK_IN_CUSTOMER_NAME);
+    }
+
+    if (name === 'paidAmount') {
+      setAutoPayEnabled(false);
+    }
+
+    if (name === 'branchId') {
+      setAutoPayEnabled(true);
+    }
   };
 
   const triggerProductSearch = useCallback((index, q) => {
@@ -495,9 +742,38 @@ export default function SalesPage({ createMode = false }) {
     setItemSearch((prev) => [...prev, { query: '', results: [], open: false }]);
   };
 
+  const deriveBalanceSummary = useCallback((saleRecord, overrideCurrentAfter) => {
+    if (!saleRecord) return { previousBalance: undefined, netBalance: undefined };
+
+    const currentAfter =
+      overrideCurrentAfter !== undefined && overrideCurrentAfter !== null
+        ? Number(overrideCurrentAfter)
+        : saleRecord?._balanceSummary?.netBalance !== undefined
+          ? Number(saleRecord._balanceSummary.netBalance)
+          : saleRecord?.contactBalance !== undefined && saleRecord?.contactBalance !== null
+            ? Number(saleRecord.contactBalance)
+            : undefined;
+
+    if (currentAfter === undefined || Number.isNaN(currentAfter)) {
+      return { previousBalance: undefined, netBalance: undefined };
+    }
+
+    return {
+      previousBalance: Number(currentAfter - toNumber(saleRecord.dueAmount || 0)),
+      netBalance: Number(currentAfter),
+    };
+  }, []);
+
   const printSale = (saleRecord, balances = {}) => {
     if (!saleRecord) return;
-    const hasBalance = balances.previousBalance !== undefined && balances.netBalance !== undefined;
+    const fallbackSummary = deriveBalanceSummary(saleRecord, viewLedgerBalance);
+    const hasBalanceSummary = balances.previousBalance !== undefined && balances.netBalance !== undefined;
+    const currentAfter = hasBalanceSummary
+      ? Number(balances.netBalance)
+      : fallbackSummary.netBalance;
+    const previousBefore = hasBalanceSummary
+      ? Number(balances.previousBalance)
+      : fallbackSummary.previousBalance;
     const qtyText = (item) => {
       if (item && item.unitQty != null) {
         const code = item.unit?.code || '';
@@ -529,6 +805,7 @@ export default function SalesPage({ createMode = false }) {
     ).join('');
 
     const splits = saleRecord.paymentSplits || [];
+    const additionalExpenseRows = getAdditionalExpenseRows(saleRecord);
     const paymentSplitHtml = Number(saleRecord.paidAmount) > 0 ? `
       <div class="tot" style="margin-top:8px">
         <div class="tot-row" style="background:#f0fdf4;font-weight:700"><span>Payment Method(s)</span><span>${fmtNum(saleRecord.paidAmount)}</span></div>
@@ -544,12 +821,19 @@ export default function SalesPage({ createMode = false }) {
       </table>
       <div class="tot" style="margin-top:14px">
         <div class="tot-row"><span>Sub Total</span><span>${fmtNum(saleRecord.subTotal)}</span></div>
-        <div class="tot-row"><span>Discount</span><span>(${fmtNum(saleRecord.discount)})</span></div>
+        ${additionalExpenseRows.map((exp) =>
+          `<div class="tot-row" style="color:#64748b"><span style="padding-left:16px">- ${exp.name}</span><span>${fmtNum(exp.amount)}</span></div>`
+        ).join('')}
+        <div class="tot-row"><span>Additional Expenses</span><span>${fmtNum(saleRecord.additionalExpensesTotal || 0)}</span></div>
+        <div className="tot-row"><span>Discount</span><span>(${fmtNum(saleRecord.discount)})</span></div>
+        ${toNumber(saleRecord.taxAmount) > 0
+          ? `<div class="tot-row"><span>${taxModeLabel(saleRecord.taxMode)} (${fmtNum(saleRecord.taxRate)}%)</span><span>${fmtNum(saleRecord.taxAmount)}</span></div>`
+          : `<div class="tot-row"><span>Tax</span><span>No Tax</span></div>`}
         <div class="tot-row"><span>Total</span><span>${fmtNum(saleRecord.totalAmount)}</span></div>
         <div class="tot-row"><span>Received</span><span>${fmtNum(saleRecord.paidAmount)}</span></div>
         <div class="tot-row"><span>Due</span><span>${fmtNum(saleRecord.dueAmount)}</span></div>
-        ${hasBalance ? `<div class="tot-row" style="background:#fef9c3"><span>Previous Balance</span><span>${fmtBal(balances.previousBalance)}</span></div>` : ''}
-        ${hasBalance ? `<div class="tot-row" style="background:#fef9c3;font-weight:700"><span>Net Balance</span><span>${fmtBal(balances.netBalance)}</span></div>` : ''}
+        ${previousBefore !== undefined ? `<div class="tot-row" style="background:#fef9c3"><span>Previous Balance</span><span>${fmtBal(previousBefore)}</span></div>` : ''}
+        ${currentAfter !== undefined ? `<div class="tot-row" style="background:#fef9c3;font-weight:700"><span>Net Balance</span><span>${fmtBal(currentAfter)}</span></div>` : ''}
       </div>
       ${paymentSplitHtml}`;
 
@@ -721,6 +1005,8 @@ export default function SalesPage({ createMode = false }) {
       invoiceNo: String(formData.invoiceNo || makeInvoiceNo()),
       saleDate: formData.saleDate,
       discount: toNumber(formData.discount),
+      additionalExpenses: buildAdditionalExpensesPayload(),
+      taxMode: normalizeTaxMode(formData.taxMode),
       paidAmount: toNumber(formData.paidAmount),
       payments: toNumber(formData.paidAmount) > 0 ? salePayments : [],
       items: items.map((item) => ({
@@ -754,7 +1040,9 @@ export default function SalesPage({ createMode = false }) {
     setSubmitting(true);
     setError('');
     try {
-      const sale = await salesService.createSale(pendingPayload);
+      const sale = editingSaleId
+        ? await salesService.updateSale(editingSaleId, pendingPayload)
+        : await salesService.createSale(pendingPayload);
       const saleNetBalance = customerLedgerBalance !== null
         ? Number(customerLedgerBalance) + Number(sale.dueAmount || 0)
         : undefined;
@@ -790,12 +1078,10 @@ export default function SalesPage({ createMode = false }) {
   };
 
   const renderCreateForm = () => (
-    <form className="auth-form modal-form" onSubmit={submitSale}>
+    <form className="auth-form modal-form sale-invoice-form" onSubmit={submitSale}>
       {error ? <p className="error-text">{error}</p> : null}
 
-      <input type="hidden" name="invoiceNo" value={formData.invoiceNo} readOnly />
-
-      <div className="modal-form-grid" style={{ gridTemplateColumns: '1fr 220px', alignItems: 'end', columnGap: '0.75rem' }}>
+      <div className="sale-invoice-form__meta">
         {user?.role === 'main_admin' ? (
           <label className="form-field" htmlFor="saleBranchId">
             <span>Branch *</span>
@@ -815,8 +1101,20 @@ export default function SalesPage({ createMode = false }) {
           </label>
         )}
 
-        <label className="form-field" htmlFor="saleDate" style={{ textAlign: 'right' }}>
-          <span style={{ display: 'block' }}>Sale Date *</span>
+        <label className="form-field" htmlFor="saleInvoiceNo">
+          <span>Invoice No *</span>
+          <input
+            id="saleInvoiceNo"
+            name="invoiceNo"
+            value={formData.invoiceNo}
+            onChange={onFormChange}
+            required
+            placeholder="e.g. INV-1001"
+          />
+        </label>
+
+        <label className="form-field" htmlFor="saleDate">
+          <span>Sale Date *</span>
           <input
             id="saleDate"
             name="saleDate"
@@ -828,33 +1126,37 @@ export default function SalesPage({ createMode = false }) {
         </label>
       </div>
 
-      <div className="modal-form-grid" style={{ gridTemplateColumns: '1fr' }}>
-        <label className="form-field" htmlFor="saleCustomer">
-          <span>Customer *</span>
-          <Select
-            id="saleCustomer"
-            name="contactId"
-            value={formData.contactId}
-            onChange={onFormChange}
-            options={[{ value: '', label: 'Select customer' }, ...(customers || []).map((c) => ({ value: String(c.id), label: c.name }))]}
-            required
-          />
-        </label>
-      </div>
+      <label className="form-field" htmlFor="saleCustomer">
+        <span>Customer *</span>
+        <Select
+          id="saleCustomer"
+          name="contactId"
+          value={formData.contactId}
+          onChange={onFormChange}
+          options={[
+            { value: '', label: 'Select customer' },
+            ...(customers || []).map((c) => ({
+              value: String(c.id),
+              label: c.name === WALK_IN_CUSTOMER_NAME ? `${c.name} (default)` : c.name,
+            })),
+          ]}
+          required
+        />
+      </label>
 
       {customerLedgerBalance !== null ? (
-        <div style={{ marginTop: '-0.35rem', marginBottom: '0.75rem', fontSize: '0.82rem' }}>
-          <span style={{ color: '#6b7280' }}>Customer Balance: </span>
-          <strong style={{ color: customerLedgerBalance >= 0 ? '#15803d' : '#dc2626' }}>
+        <div className="sale-invoice-form__balance">
+          <span>Customer Balance: </span>
+          <strong className={customerLedgerBalance >= 0 ? 'is-dr' : 'is-cr'}>
             {Math.abs(customerLedgerBalance).toFixed(2)} {customerLedgerBalance >= 0 ? 'Dr' : 'Cr'}
           </strong>
           {totals.dueAmount > 0 ? (
-            <span style={{ marginLeft: 24 }}>
-              <span style={{ color: '#6b7280' }}>After Invoice: </span>
-              <strong style={{ color: (customerLedgerBalance + totals.dueAmount) >= 0 ? '#15803d' : '#dc2626' }}>
+            <>
+              <span>After Invoice: </span>
+              <strong className={(customerLedgerBalance + totals.dueAmount) >= 0 ? 'is-dr' : 'is-cr'}>
                 {Math.abs(customerLedgerBalance + totals.dueAmount).toFixed(2)} {(customerLedgerBalance + totals.dueAmount) >= 0 ? 'Dr' : 'Cr'}
               </strong>
-            </span>
+            </>
           ) : null}
         </div>
       ) : null}
@@ -891,11 +1193,12 @@ export default function SalesPage({ createMode = false }) {
                   </td>
                   <td style={{ position: 'relative' }}>
                     <Input
-                      className="" 
+                      ref={index === 0 ? productSearchRef : undefined}
+                      className=""
                       type="text"
                       value={search.query}
                       onChange={(e) => onItemSearchChange(index, e.target.value)}
-                      placeholder="Type to search…"
+                      placeholder="Type product / barcode…"
                       required
                     />
                     {(() => {
@@ -966,7 +1269,7 @@ export default function SalesPage({ createMode = false }) {
                   </td>
                   <td>
                     <Input
-                      className="" 
+                      className="no-spinner"
                       type="number"
                       min="0.0001"
                       step="0.0001"
@@ -977,7 +1280,7 @@ export default function SalesPage({ createMode = false }) {
                   </td>
                   <td>
                     <Input
-                      className="" 
+                      className="no-spinner"
                       type="number"
                       min={toNumber(item.productCostPrice || 0)}
                       step="0.01"
@@ -1021,13 +1324,73 @@ export default function SalesPage({ createMode = false }) {
         </button>
       </div>
 
-      <div className="inline-actions inline-actions--end" style={{ marginTop: '0.5rem' }}>
-        <div style={{ display: 'grid', gridTemplateColumns: '140px 140px', gap: '0.5rem', alignItems: 'end' }}>
-          <label className="form-field" htmlFor="saleDiscount" style={{ marginBottom: 0 }}>
-            <span style={{ fontSize: '0.78rem' }}>Discount</span>
-            <Input
+      <div className="sale-invoice-form__side-panel">
+        <div className="sale-invoice-form__side-title">Additional Expenses</div>
+        <div className="sale-invoice-form__expense-list">
+          {additionalExpenses.map((expense, index) => (
+            <div key={`sale-expense-${index}`} className="sale-invoice-form__expense-row">
+              <Input
+                type="text"
+                value={expense.name}
+                placeholder="Expense name"
+                onChange={(e) => updateAdditionalExpense(index, 'name', e.target.value)}
+              />
+              <Input
+                className="no-spinner"
+                type="number"
+                min="0"
+                step="0.01"
+                value={expense.amount}
+                onChange={(e) => updateAdditionalExpense(index, 'amount', e.target.value)}
+              />
+              <button
+                type="button"
+                className="table-action-button table-action-button--danger"
+                onClick={() => removeAdditionalExpense(index)}
+                disabled={additionalExpenses.length === 1}
+              >
+                ✕
+              </button>
+            </div>
+          ))}
+        </div>
+        <div className="inline-actions inline-actions--end">
+          <button type="button" className="secondary-action-button" onClick={addAdditionalExpense}>
+            + Add Expense
+          </button>
+        </div>
+      </div>
+
+      <div className="sale-invoice-form__side-panel">
+        <div className="sale-invoice-form__amounts">
+          <label className="form-field" htmlFor="saleTaxMode">
+            <span>Tax</span>
+            <select
+              id="saleTaxMode"
+              name="taxMode"
+              value={normalizeTaxMode(formData.taxMode)}
+              onChange={onFormChange}
+            >
+              {TAX_MODE_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                  {opt.value === 'cash_tax' && Number(company?.cashTaxRate || 0) > 0
+                    ? ` (${Number(company.cashTaxRate)}%)`
+                    : ''}
+                  {opt.value === 'card_tax' && Number(company?.cardTaxRate || 0) > 0
+                    ? ` (${Number(company.cardTaxRate)}%)`
+                    : ''}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="form-field" htmlFor="saleDiscount">
+            <span>Discount</span>
+            <input
               id="saleDiscount"
               name="discount"
+              className="no-spinner"
               type="number"
               min="0"
               step="0.01"
@@ -1036,11 +1399,12 @@ export default function SalesPage({ createMode = false }) {
             />
           </label>
 
-          <label className="form-field" htmlFor="salePaidAmount" style={{ marginBottom: 0 }}>
-            <span style={{ fontSize: '0.78rem' }}>Received</span>
-            <Input
+          <label className="form-field" htmlFor="salePaidAmount">
+            <span>Received</span>
+            <input
               id="salePaidAmount"
               name="paidAmount"
+              className="no-spinner"
               type="number"
               min="0"
               step="0.01"
@@ -1050,7 +1414,7 @@ export default function SalesPage({ createMode = false }) {
           </label>
         </div>
 
-        {toNumber(formData.paidAmount) > 0 && (
+        {toNumber(formData.paidAmount) > 0 ? (
           <PaymentSelector
             totalAmount={toNumber(formData.paidAmount)}
             branchId={formData.branchId ? Number(formData.branchId) : (user?.branchId ? Number(user.branchId) : undefined)}
@@ -1058,15 +1422,20 @@ export default function SalesPage({ createMode = false }) {
             disabled={submitting}
             label="Payment Accounts"
           />
-        )}
-      </div>
+        ) : null}
 
-      <div className="totals-panel">
-        <div className="totals-row"><span>Sub Total</span><span>{totals.subTotal.toFixed(2)}</span></div>
-        <div className="totals-row"><span>Discount</span><span>({toNumber(formData.discount).toFixed(2)})</span></div>
-        <div className="totals-row totals-row--total"><span>Total</span><span>{totals.totalAmount.toFixed(2)}</span></div>
-        <div className="totals-row"><span>Received</span><span>{toNumber(formData.paidAmount).toFixed(2)}</span></div>
-        <div className="totals-row due-row"><span>Due</span><span>{totals.dueAmount.toFixed(2)}</span></div>
+        <div className="totals-panel sale-invoice-form__totals">
+          <div className="totals-row"><span>Sub Total</span><span>{totals.subTotal.toFixed(2)}</span></div>
+          <div className="totals-row"><span>Additional Expenses</span><span>{totals.additionalExpensesTotal.toFixed(2)}</span></div>
+          <div className="totals-row"><span>Discount</span><span>({toNumber(formData.discount).toFixed(2)})</span></div>
+          <div className="totals-row">
+            <span>{totals.taxMode === TAX_MODE_NONE ? 'Tax' : `${taxModeLabel(totals.taxMode)} (${totals.taxRate}%)`}</span>
+            <span>{totals.taxMode === TAX_MODE_NONE ? 'No Tax' : totals.taxAmount.toFixed(2)}</span>
+          </div>
+          <div className="totals-row totals-row--total"><span>Total</span><span>{totals.totalAmount.toFixed(2)}</span></div>
+          <div className="totals-row"><span>Received</span><span>{toNumber(formData.paidAmount).toFixed(2)}</span></div>
+          <div className="totals-row due-row"><span>Due</span><span>{totals.dueAmount.toFixed(2)}</span></div>
+        </div>
       </div>
 
       <div className="inline-actions inline-actions--end">
@@ -1074,7 +1443,7 @@ export default function SalesPage({ createMode = false }) {
           Cancel
         </Button>
         <Button variant="primary" type="submit" disabled={submitting}>
-          {submitting ? 'Saving...' : 'Create Invoice'}
+          {submitting ? 'Saving...' : (editingSaleId ? 'Update Invoice' : 'Create Invoice')}
         </Button>
       </div>
     </form>
@@ -1084,8 +1453,8 @@ export default function SalesPage({ createMode = false }) {
     return (
       <div className="dashboard-stack">
         <PageCard
-          title="Create Sales Invoice"
-          subtitle="Posted sale with line items — inventory and receivable updated on save"
+          title={editingSaleId ? 'Edit Sales Invoice' : 'Create Sales Invoice'}
+          subtitle={editingSaleId ? 'Update posted sale line items and amounts' : 'Posted sale with line items — inventory and receivable updated on save'}
           actions={
             <Button variant="secondary" className="no-print" onClick={() => navigate('/sales')}>
               Back to Sales
@@ -1097,11 +1466,11 @@ export default function SalesPage({ createMode = false }) {
 
         {isConfirmSubmitOpen ? (
           <ModalDialog
-            title="Confirm Invoice Submission"
-            subtitle="Please confirm before creating this sales invoice"
+            title={editingSaleId ? 'Confirm Invoice Update' : 'Confirm Invoice Submission'}
+            subtitle={editingSaleId ? 'Please confirm before updating this sales invoice' : 'Please confirm before creating this sales invoice'}
             onClose={() => setIsConfirmSubmitOpen(false)}
           >
-            <p style={{ margin: 0 }}>Are you sure you want to create this invoice?</p>
+            <p style={{ margin: 0 }}>{editingSaleId ? 'Are you sure you want to update this invoice?' : 'Are you sure you want to create this invoice?'}</p>
             {customerLedgerBalance !== null ? (
               <div style={{ marginTop: '0.8rem', padding: '8px 12px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 6, fontSize: '0.83rem' }}>
                 <div><span style={{ color: '#64748b' }}>Previous Balance: </span><strong>{fmtBal(customerLedgerBalance)}</strong></div>
@@ -1123,7 +1492,7 @@ export default function SalesPage({ createMode = false }) {
                 onClick={confirmSubmitSale}
                 disabled={submitting}
               >
-                {submitting ? 'Creating…' : 'Yes, Create Invoice'}
+                {submitting ? (editingSaleId ? 'Updating…' : 'Creating…') : (editingSaleId ? 'Yes, Update Invoice' : 'Yes, Create Invoice')}
               </button>
             </div>
           </ModalDialog>
@@ -1131,11 +1500,11 @@ export default function SalesPage({ createMode = false }) {
 
         {isSuccessModalOpen && createdSale ? (
           <ModalDialog
-            title="Invoice Created"
-            subtitle={`Invoice ${createdSale.invoiceNo} created successfully`}
+            title={editingSaleId ? 'Invoice Updated' : 'Invoice Created'}
+            subtitle={`Invoice ${createdSale.invoiceNo} ${editingSaleId ? 'updated' : 'created'} successfully`}
             onClose={() => setIsSuccessModalOpen(false)}
           >
-            <p style={{ margin: 0 }}>Sales invoice has been posted successfully.</p>
+            <p style={{ margin: 0 }}>Sales invoice has been {editingSaleId ? 'updated' : 'posted'} successfully.</p>
             <div className="inline-actions inline-actions--end" style={{ marginTop: '1rem' }}>
               <button
                 type="button"
@@ -1160,17 +1529,17 @@ export default function SalesPage({ createMode = false }) {
               </button>
               <button
                 type="button"
-                className="secondary-action-button"
+                className="primary-action-button"
                 onClick={() => {
                   setIsSuccessModalOpen(false);
                   resetCreateForm();
                 }}
               >
-                Create Another
+                Save & New
               </button>
               <button
                 type="button"
-                className="primary-action-button"
+                className="secondary-action-button"
                 onClick={() => {
                   setIsSuccessModalOpen(false);
                   navigate('/sales');
@@ -1215,7 +1584,7 @@ export default function SalesPage({ createMode = false }) {
         title="Sales"
         subtitle="Create and manage customer sales invoices"
         actions={
-          <>
+          canCreateSale ? (
             <Button
               variant="primary"
               className="no-print"
@@ -1226,7 +1595,7 @@ export default function SalesPage({ createMode = false }) {
             >
               Add Invoice
             </Button>
-          </>
+          ) : null
         }
       >
         {error ? <p className="error-text">{error}</p> : null}
@@ -1332,21 +1701,35 @@ export default function SalesPage({ createMode = false }) {
                         <button type="button" className="table-action-button" onClick={() => openView(row)}>
                           View
                         </button>
-                        <button
-                          type="button"
-                          className="table-action-button"
-                          onClick={() => navigate(`/sales-returns?saleId=${row.id}&invoiceNo=${encodeURIComponent(row.invoiceNo)}`)}
-                          disabled={row.status === 'cancelled'}
-                        >
-                          Return
-                        </button>
-                        <button
-                          type="button"
-                          className={row.status === 'cancelled' ? 'table-action-button' : 'table-action-button table-action-button--danger'}
-                          onClick={() => (row.status === 'cancelled' ? onRepostSale(row) : onCancelSale(row))}
-                        >
-                          {row.status === 'cancelled' ? 'Post' : 'Cancel'}
-                        </button>
+                        {canCreateSale ? (
+                          <button
+                            type="button"
+                            className="table-action-button"
+                            onClick={() => navigate('/sales/new', { state: { editId: row.id } })}
+                            disabled={row.status === 'cancelled'}
+                          >
+                            Edit
+                          </button>
+                        ) : null}
+                        {canReturnSale ? (
+                          <button
+                            type="button"
+                            className="table-action-button"
+                            onClick={() => navigate(`/sales-returns?saleId=${row.id}&invoiceNo=${encodeURIComponent(row.invoiceNo)}`)}
+                            disabled={row.status === 'cancelled'}
+                          >
+                            Return
+                          </button>
+                        ) : null}
+                        {canCreateSale ? (
+                          <button
+                            type="button"
+                            className={row.status === 'cancelled' ? 'table-action-button' : 'table-action-button table-action-button--danger'}
+                            onClick={() => (row.status === 'cancelled' ? onRepostSale(row) : onCancelSale(row))}
+                          >
+                            {row.status === 'cancelled' ? 'Post' : 'Cancel'}
+                          </button>
+                        ) : null}
                       </div>
                     </td>
                   </tr>
@@ -1407,11 +1790,40 @@ export default function SalesPage({ createMode = false }) {
 
           <div className="totals-panel">
             <div className="totals-row"><span>Sub Total</span><span>{toNumber(viewSale.subTotal).toFixed(2)}</span></div>
+            <div className="totals-row"><span>Additional Expenses</span><span>{toNumber(viewSale.additionalExpensesTotal).toFixed(2)}</span></div>
+            {getAdditionalExpenseRows(viewSale).map((expense, idx) => (
+              <div className="totals-row" key={`view-sale-expense-${idx}`} style={{ color: '#64748b' }}><span style={{ paddingLeft: 16 }}>- {expense.name}</span><span>{toNumber(expense.amount).toFixed(2)}</span></div>
+            ))}
             <div className="totals-row"><span>Discount</span><span>({toNumber(viewSale.discount).toFixed(2)})</span></div>
+            <div className="totals-row">
+              <span>
+                {toNumber(viewSale.taxAmount) > 0
+                  ? `${taxModeLabel(viewSale.taxMode)} (${toNumber(viewSale.taxRate)}%)`
+                  : 'Tax'}
+              </span>
+              <span>{toNumber(viewSale.taxAmount) > 0 ? toNumber(viewSale.taxAmount).toFixed(2) : 'No Tax'}</span>
+            </div>
             <div className="totals-row totals-row--total"><span>Total</span><span>{toNumber(viewSale.totalAmount).toFixed(2)}</span></div>
             <div className="totals-row"><span>Paid</span><span>{toNumber(viewSale.paidAmount).toFixed(2)}</span></div>
             <div className="totals-row due-row"><span>Due</span><span>{toNumber(viewSale.dueAmount).toFixed(2)}</span></div>
           </div>
+
+          {(() => {
+            const summary = deriveBalanceSummary(viewSale, viewLedgerBalance);
+            if (summary.netBalance === undefined || summary.previousBalance === undefined) return null;
+            return (
+              <div style={{ marginTop: '0.75rem', padding: '8px 13px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 4, fontSize: '0.82rem', lineHeight: '1.7' }}>
+                <span style={{ color: '#6b7280' }}>Previous Balance: </span>
+                <strong style={{ color: summary.previousBalance >= 0 ? '#15803d' : '#dc2626' }}>
+                  {Math.abs(summary.previousBalance).toFixed(2)} {summary.previousBalance >= 0 ? 'Dr' : 'Cr'}
+                </strong>
+                <span style={{ color: '#6b7280', marginLeft: 24 }}>Net Balance: </span>
+                <strong style={{ color: summary.netBalance >= 0 ? '#15803d' : '#dc2626' }}>
+                  {Math.abs(summary.netBalance).toFixed(2)} {summary.netBalance >= 0 ? 'Dr' : 'Cr'}
+                </strong>
+              </div>
+            );
+          })()}
 
           <div className="inline-actions inline-actions--end" style={{ marginTop: '1rem' }}>
             <button
@@ -1437,10 +1849,7 @@ export default function SalesPage({ createMode = false }) {
             <button
               type="button"
               className="secondary-action-button"
-              onClick={() => printSale(viewSale, {
-                previousBalance: viewLedgerBalance !== null ? Number(viewLedgerBalance) - Number(viewSale.dueAmount || 0) : undefined,
-                netBalance: viewLedgerBalance !== null ? Number(viewLedgerBalance) : undefined,
-              })}
+              onClick={() => printSale(viewSale, deriveBalanceSummary(viewSale, viewLedgerBalance))}
             >
               &#128424; Print
             </button>
@@ -1530,17 +1939,17 @@ export default function SalesPage({ createMode = false }) {
             </button>
             <button
               type="button"
-              className="secondary-action-button"
+              className="primary-action-button"
               onClick={() => {
                 setIsSuccessModalOpen(false);
                 resetCreateForm();
               }}
             >
-              Create Another
+              Save & New
             </button>
             <button
               type="button"
-              className="primary-action-button"
+              className="secondary-action-button"
               onClick={() => {
                 setIsSuccessModalOpen(false);
                 navigate('/sales');

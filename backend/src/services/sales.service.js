@@ -21,9 +21,72 @@ const {
   PaymentAccount,
   PaymentTransactionSplit,
   Unit,
+  CompanySettings,
 } = require('../models');
 
 const toNumber = (value) => Number(value || 0);
+
+const normalizeTaxMode = (value) => {
+  if (value === 'cash_tax' || value === 'card_tax') return value;
+  return 'no_tax';
+};
+
+const resolveTaxRateFromSettings = async (taxMode, transaction) => {
+  const mode = normalizeTaxMode(taxMode);
+  if (mode === 'no_tax') return 0;
+  const settings = await CompanySettings.findOne({
+    order: [['id', 'ASC']],
+    transaction,
+  });
+  if (!settings) return 0;
+  if (mode === 'cash_tax') return Math.max(0, toNumber(settings.cashTaxRate));
+  if (mode === 'card_tax') return Math.max(0, toNumber(settings.cardTaxRate));
+  return 0;
+};
+
+const parseAdditionalExpenses = (raw) => {
+  const source = Array.isArray(raw)
+    ? raw
+    : (() => {
+        if (!raw) return [];
+        if (typeof raw === 'string') {
+          try {
+            const parsed = JSON.parse(raw);
+            return Array.isArray(parsed) ? parsed : [];
+          } catch {
+            return [];
+          }
+        }
+        return [];
+      })();
+
+  const normalized = source
+    .map((entry, idx) => {
+      const amount = toNumber(entry?.amount);
+      if (!Number.isFinite(amount) || amount < 0) {
+        throw new Error('Additional expense amount must be 0 or more');
+      }
+      if (amount <= 0) return null;
+
+      const name = String(entry?.name || '').trim() || `Expense ${idx + 1}`;
+      return { name, amount: Number(amount.toFixed(2)) };
+    })
+    .filter(Boolean);
+
+  const total = normalized.reduce((sum, entry) => sum + toNumber(entry.amount), 0);
+  return {
+    rows: normalized,
+    total: Number(total.toFixed(2)),
+  };
+};
+
+const enrichSaleExpenses = (sale) => {
+  if (!sale) return sale;
+  const parsed = parseAdditionalExpenses(sale.additionalExpenses);
+  sale.dataValues.additionalExpenses = parsed.rows;
+  sale.dataValues.additionalExpensesTotal = toNumber(sale.additionalExpensesTotal || parsed.total);
+  return sale;
+};
 
 const parseBranchId = (actor, branchIdInput) => {
   if (actor.role === 'main_admin') {
@@ -54,7 +117,7 @@ const ensureProducts = async (items, transaction) => {
   return products;
 };
 
-const computeTotals = (items, discount = 0, paidAmount = 0) => {
+const computeTotals = (items, discount = 0, paidAmount = 0, additionalExpensesTotal = 0, taxRate = 0) => {
   const subTotal = items.reduce((sum, item) => {
     // If payload includes unitQty, treat unitPrice as "price in selected unit".
     // Otherwise, keep legacy meaning: quantity/unitPrice are already in base units.
@@ -66,13 +129,26 @@ const computeTotals = (items, discount = 0, paidAmount = 0) => {
 
   const safeDiscount = toNumber(discount);
   const safePaid = toNumber(paidAmount);
-  const totalAmount = subTotal - safeDiscount;
+  const safeAdditionalExpensesTotal = toNumber(additionalExpensesTotal);
+  const taxableBase = subTotal + safeAdditionalExpensesTotal - safeDiscount;
+  const safeTaxRate = Math.max(0, toNumber(taxRate));
+  const taxAmount = Math.round(taxableBase * safeTaxRate) / 100;
+  const totalAmount = taxableBase + taxAmount;
   const dueAmount = totalAmount - safePaid;
 
-  if (totalAmount < 0) throw new Error('Discount cannot exceed subtotal');
-  if (safePaid > totalAmount) throw new Error('Paid amount cannot exceed total amount');
+  if (taxableBase < 0) throw new Error('Discount cannot exceed subtotal plus additional expenses');
+  if (safePaid > totalAmount + 0.00001) throw new Error('Paid amount cannot exceed total amount');
 
-  return { subTotal, discount: safeDiscount, totalAmount, paidAmount: safePaid, dueAmount };
+  return {
+    subTotal,
+    discount: safeDiscount,
+    additionalExpensesTotal: safeAdditionalExpensesTotal,
+    taxRate: safeTaxRate,
+    taxAmount,
+    totalAmount,
+    paidAmount: safePaid,
+    dueAmount,
+  };
 };
 
 const listSales = async ({ branchId, filters = {} }) => {
@@ -147,7 +223,7 @@ const getSale = async ({ saleId, actor }) => {
   });
   sale.dataValues.contactBalance = contactBal ? Number(contactBal.receivableBalance || 0) : null;
 
-  return sale;
+  return enrichSaleExpenses(sale);
 };
 
 const listSaleReturns = async ({ branchId, filters = {} }) => {
@@ -369,8 +445,10 @@ const createSale = async ({ payload, actor }) => {
     saleDate,
     discount = 0,
     paidAmount = 0,
+    additionalExpenses = [],
     payments = [],
     items = [],
+    taxMode: taxModeInput = 'no_tax',
   } = payload;
 
   const branchId = parseBranchId(actor, branchIdInput);
@@ -387,7 +465,10 @@ const createSale = async ({ payload, actor }) => {
     const duplicate = await Sale.findOne({ where: { branchId, invoiceNo }, transaction: txn });
     if (duplicate) throw new Error('Invoice number already exists for this branch');
 
-    const totals = computeTotals(items, discount, paidAmount);
+    const taxMode = normalizeTaxMode(taxModeInput);
+    const taxRate = await resolveTaxRateFromSettings(taxMode, txn);
+    const additionalExpenseMeta = parseAdditionalExpenses(additionalExpenses);
+    const totals = computeTotals(items, discount, paidAmount, additionalExpenseMeta.total, taxRate);
 
     const sale = await Sale.create(
       {
@@ -397,6 +478,11 @@ const createSale = async ({ payload, actor }) => {
         saleDate,
         subTotal: totals.subTotal,
         discount: totals.discount,
+        additionalExpensesTotal: totals.additionalExpensesTotal,
+        additionalExpenses: JSON.stringify(additionalExpenseMeta.rows),
+        taxMode,
+        taxRate: totals.taxRate,
+        taxAmount: totals.taxAmount,
         totalAmount: totals.totalAmount,
         paidAmount: totals.paidAmount,
         dueAmount: totals.dueAmount,
@@ -744,8 +830,253 @@ const createSaleReturn = async ({ payload, actor }) => {
   }
 };
 
-const updateSale = async () => {
-  throw new Error('Sale update is not available yet');
+const reverseSaleInventoryAndLedger = async ({ sale, transaction: txn }) => {
+  const saleItemIds = (sale.items || []).map((i) => i.id).filter(Boolean);
+  const saleItemBatchRows = saleItemIds.length
+    ? await SaleItemBatch.findAll({
+        where: { saleItemId: { [Op.in]: saleItemIds } },
+        transaction: txn,
+      })
+    : [];
+
+  if (saleItemBatchRows.length > 0) {
+    const batchRestoreQtyMap = new Map();
+    for (const row of saleItemBatchRows) {
+      const key = Number(row.inventoryBatchId);
+      batchRestoreQtyMap.set(key, (batchRestoreQtyMap.get(key) || 0) + toNumber(row.quantityAllocated));
+    }
+
+    const batchIds = Array.from(batchRestoreQtyMap.keys());
+    if (batchIds.length) {
+      const batches = await InventoryBatch.findAll({
+        where: { id: { [Op.in]: batchIds } },
+        transaction: txn,
+        lock: txn.LOCK.UPDATE,
+      });
+
+      await Promise.all(
+        batches.map(async (batch) => {
+          const restoreQty = batchRestoreQtyMap.get(batch.id) || 0;
+          if (!restoreQty) return;
+          batch.quantityRemaining = toNumber(batch.quantityRemaining) + restoreQty;
+          await batch.save({ transaction: txn });
+        })
+      );
+    }
+  }
+
+  for (const item of sale.items || []) {
+    const productId = Number(item.productId);
+    const quantity = toNumber(item.quantity);
+    const sourceBranchId = Number(item.sourceBranchId || sale.branchId);
+
+    if (!saleItemBatchRows.length) {
+      await reverseStockOut({ branchId: sourceBranchId, productId, qty: quantity }, txn);
+    }
+
+    const [inventoryBalance] = await InventoryBalance.findOrCreate({
+      where: { branchId: sourceBranchId, productId },
+      defaults: { branchId: sourceBranchId, productId, quantity: 0 },
+      transaction: txn,
+    });
+
+    inventoryBalance.quantity = toNumber(inventoryBalance.quantity) + quantity;
+    await inventoryBalance.save({ transaction: txn });
+  }
+
+  const receiptReferenceNo = `${sale.invoiceNo}-RCV`;
+
+  await LedgerEntry.destroy({
+    where: {
+      branchId: sale.branchId,
+      [Op.or]: [
+        { referenceType: 'sale', referenceId: sale.id },
+        { referenceType: 'payment_received', referenceNo: receiptReferenceNo },
+      ],
+    },
+    transaction: txn,
+  });
+
+  await PaymentTransaction.destroy({
+    where: {
+      branchId: sale.branchId,
+      referenceNo: receiptReferenceNo,
+    },
+    transaction: txn,
+  });
+
+  if (saleItemIds.length) {
+    await SaleItemBatch.destroy({ where: { saleItemId: { [Op.in]: saleItemIds } }, transaction: txn });
+  }
+  await SaleItem.destroy({ where: { saleId: sale.id }, transaction: txn });
+};
+
+const updateSale = async ({ saleId, payload, actor }) => {
+  const {
+    contactId,
+    invoiceNo,
+    saleDate,
+    discount = 0,
+    paidAmount = 0,
+    additionalExpenses = [],
+    payments = [],
+    items = [],
+    taxMode: taxModeInput = 'no_tax',
+  } = payload;
+
+  if (!Array.isArray(items) || items.length === 0) {
+    throw new Error('At least one sale item is required');
+  }
+
+  const txn = await sequelize.transaction();
+  try {
+    const sale = await Sale.findByPk(Number(saleId), {
+      include: [{ model: SaleItem, as: 'items' }],
+      transaction: txn,
+    });
+
+    if (!sale) throw new Error('Sale not found');
+
+    const branchId = parseBranchId(actor, sale.branchId);
+    if (Number(branchId) !== Number(sale.branchId)) {
+      throw new Error('Not allowed to update this sale');
+    }
+
+    if (sale.status === 'cancelled') {
+      throw new Error('Cannot update a cancelled sale');
+    }
+
+    const returnCount = await SaleReturn.count({
+      where: { branchId: sale.branchId, saleIdReference: sale.id },
+      transaction: txn,
+    });
+    if (returnCount > 0) {
+      throw new Error('Cannot update sale after returns are recorded');
+    }
+
+    await reverseSaleInventoryAndLedger({ sale, transaction: txn });
+
+    const effectiveInvoiceNo = String(invoiceNo || sale.invoiceNo).trim();
+    const effectiveContactId = Number(contactId || sale.contactId);
+    const effectiveDate = saleDate || sale.saleDate;
+
+    await ensureCustomerContact(sale.branchId, effectiveContactId, txn);
+    await ensureProducts(items, txn);
+
+    const duplicate = await Sale.findOne({
+      where: {
+        branchId: sale.branchId,
+        invoiceNo: effectiveInvoiceNo,
+        id: { [Op.ne]: sale.id },
+      },
+      transaction: txn,
+    });
+    if (duplicate) throw new Error('Invoice number already exists for this branch');
+
+    const additionalExpenseMeta = parseAdditionalExpenses(additionalExpenses);
+    const taxMode = normalizeTaxMode(taxModeInput);
+    const taxRate = await resolveTaxRateFromSettings(taxMode, txn);
+    const totals = computeTotals(items, discount, paidAmount, additionalExpenseMeta.total, taxRate);
+
+    sale.contactId = effectiveContactId;
+    sale.invoiceNo = effectiveInvoiceNo;
+    sale.saleDate = effectiveDate;
+    sale.subTotal = totals.subTotal;
+    sale.discount = totals.discount;
+    sale.additionalExpensesTotal = totals.additionalExpensesTotal;
+    sale.additionalExpenses = JSON.stringify(additionalExpenseMeta.rows);
+    sale.taxMode = taxMode;
+    sale.taxRate = totals.taxRate;
+    sale.taxAmount = totals.taxAmount;
+    sale.totalAmount = totals.totalAmount;
+    sale.paidAmount = totals.paidAmount;
+    sale.dueAmount = totals.dueAmount;
+    sale.status = 'posted';
+    await sale.save({ transaction: txn });
+
+    for (const item of items) {
+      const productId = Number(item.productId);
+      const unitId = item.unitId != null ? Number(item.unitId) : null;
+      const unitQty = item.unitQty != null ? toNumber(item.unitQty) : null;
+      const conversionFactor = toNumber(item.conversionFactor || 1) || 1;
+      const quantity = unitQty != null ? unitQty * conversionFactor : toNumber(item.quantity);
+      const unitPrice = unitQty != null ? toNumber(item.unitPrice) / conversionFactor : toNumber(item.unitPrice);
+      const lineAmount = unitQty != null ? unitQty * toNumber(item.unitPrice) : quantity * unitPrice;
+      const sourceBranchId = Number(item.sourceBranchId || sale.branchId);
+
+      if (quantity <= 0) throw new Error('Item quantity must be greater than zero');
+
+      const saleItem = await SaleItem.create(
+        {
+          saleId: sale.id,
+          productId,
+          sourceBranchId,
+          quantity,
+          unitPrice,
+          lineAmount,
+          unitId,
+          unitQty,
+          conversionFactor,
+          notes: item.notes || null,
+        },
+        { transaction: txn }
+      );
+
+      const [inventoryBalance] = await InventoryBalance.findOrCreate({
+        where: { branchId: sourceBranchId, productId },
+        defaults: { branchId: sourceBranchId, productId, quantity: 0 },
+        transaction: txn,
+      });
+
+      const { allocations } = await consumeStockOutAllocations(
+        { branchId: sourceBranchId, productId, qty: quantity },
+        txn
+      );
+
+      if (allocations.length) {
+        await Promise.all(
+          allocations.map((a) =>
+            SaleItemBatch.create(
+              {
+                saleItemId: saleItem.id,
+                inventoryBatchId: a.batchId,
+                quantityAllocated: a.quantity,
+              },
+              { transaction: txn }
+            )
+          )
+        );
+      }
+
+      const nextQty = toNumber(inventoryBalance.quantity) - quantity;
+      if (nextQty < 0) {
+        throw new Error(`Insufficient stock for product ${productId}`);
+      }
+      inventoryBalance.quantity = nextQty;
+      await inventoryBalance.save({ transaction: txn });
+    }
+
+    await postLedgerForSale({
+      branchId: sale.branchId,
+      contactId: effectiveContactId,
+      sale,
+      payments,
+      createdById: actor.id,
+      transaction: txn,
+    });
+
+    await refreshContactBalance({
+      branchId: sale.branchId,
+      contactId: effectiveContactId,
+      transaction: txn,
+    });
+
+    await txn.commit();
+    return getSale({ saleId: sale.id, actor });
+  } catch (error) {
+    await txn.rollback();
+    throw error;
+  }
 };
 
 const cancelSale = async ({ saleId, actor }) => {

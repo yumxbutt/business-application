@@ -1,0 +1,404 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: business-application-production
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build frontend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install & build
+        working-directory: frontend
+        env:
+          VITE_API_BASE_URL_VAR: ${{ vars.VITE_API_BASE_URL }}
+        run: |
+          set -euo pipefail
+          WANT="https://baapi.swiftgd.com/api"
+          RAW="${VITE_API_BASE_URL_VAR:-}"
+          if [ -z "$RAW" ] || [[ "$RAW" == http://* ]]; then
+            export VITE_API_BASE_URL="$WANT"
+            echo "Using production API URL: $VITE_API_BASE_URL"
+            if [ -n "$RAW" ]; then
+              echo "::warning::Ignored GitHub variable VITE_API_BASE_URL='$RAW'. Update it to $WANT"
+            fi
+          else
+            export VITE_API_BASE_URL="$RAW"
+            echo "Building with VITE_API_BASE_URL=$VITE_API_BASE_URL"
+          fi
+          npm ci
+          npm run build
+          if ! grep -R --include='*.js' -l 'baapi.swiftgd.com\|VITE_API' dist/ >/dev/null 2>&1; then
+            # Soft check: ensure some https API host is baked in
+            if ! grep -R --include='*.js' -l 'https://' dist/ >/dev/null 2>&1; then
+              echo "::warning::Could not confirm API host in bundle — verify VITE_API_BASE_URL"
+            fi
+          fi
+          echo "Frontend build OK"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist/
+          retention-days: 7
+
+  deploy-backend:
+    name: Deploy API (VPS)
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure SSH key
+        env:
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+        run: |
+          set -euo pipefail
+          if [ -z "${VPS_SSH_KEY// }" ]; then
+            echo "::error::VPS_SSH_KEY is empty. Add repository secret VPS_SSH_KEY"
+            exit 1
+          fi
+          if [ -z "${VPS_HOST// }" ]; then
+            echo "::error::VPS_HOST is empty. Add repository secret VPS_HOST"
+            exit 1
+          fi
+          if [ -z "${VPS_USER// }" ]; then
+            echo "::error::VPS_USER is empty. Add repository secret VPS_USER"
+            exit 1
+          fi
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          ssh-keyscan -H "$VPS_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          chmod 644 ~/.ssh/known_hosts
+          echo "SSH key configured for ${VPS_USER}@${VPS_HOST}"
+
+      - name: Test SSH connection
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+        run: |
+          set -euo pipefail
+          if ! ssh -i ~/.ssh/id_deploy -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            "${VPS_USER}@${VPS_HOST}" "echo SSH_OK"; then
+            echo "::error::SSH login failed. On VPS authorize the deploy public key in ~/.ssh/authorized_keys"
+            exit 1
+          fi
+
+      - name: Prepare deploy directory
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          DEPLOY_PATH: ${{ vars.VPS_DEPLOY_PATH }}
+        run: |
+          DEPLOY_PATH="${DEPLOY_PATH:-/var/www/business-application}"
+          ssh -i ~/.ssh/id_deploy -o StrictHostKeyChecking=yes "${VPS_USER}@${VPS_HOST}" \
+            "sudo mkdir -p ${DEPLOY_PATH}/backend ${DEPLOY_PATH}/deploy && sudo chown -R ${VPS_USER}:${VPS_USER} ${DEPLOY_PATH}"
+
+      - name: Sync backend code
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          DEPLOY_PATH: ${{ vars.VPS_DEPLOY_PATH }}
+        run: |
+          set -euo pipefail
+          DEPLOY_PATH="${DEPLOY_PATH:-/var/www/business-application}"
+          RSYNC_SSH="ssh -i ~/.ssh/id_deploy -o StrictHostKeyChecking=yes"
+          rsync -rlvz --no-times --omit-dir-times -e "$RSYNC_SSH" --delete \
+            --exclude 'node_modules' \
+            --exclude '.env' \
+            --exclude '.git' \
+            backend/ "${VPS_USER}@${VPS_HOST}:${DEPLOY_PATH}/backend/"
+          rsync -rlvz --no-times --omit-dir-times -e "$RSYNC_SSH" deploy/ecosystem.config.cjs \
+            "${VPS_USER}@${VPS_HOST}:${DEPLOY_PATH}/deploy/"
+
+      - name: Install dependencies & restart PM2
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          DEPLOY_PATH: ${{ vars.VPS_DEPLOY_PATH }}
+        run: |
+          set -euo pipefail
+          DEPLOY_PATH="${DEPLOY_PATH:-/var/www/business-application}"
+          ssh -i ~/.ssh/id_deploy -o StrictHostKeyChecking=yes "${VPS_USER}@${VPS_HOST}" bash -s << EOF
+          set -euo pipefail
+          export PATH="/opt/node20/bin:/usr/local/bin:\$PATH"
+          PM2_BIN="\$(command -v pm2 || true)"
+          if [ -z "\$PM2_BIN" ] && [ -x /opt/node20/bin/pm2 ]; then
+            PM2_BIN=/opt/node20/bin/pm2
+          fi
+          if [ -z "\$PM2_BIN" ]; then
+            echo "::error::pm2 not found. Expected pm2 on PATH or /opt/node20/bin/pm2"
+            exit 1
+          fi
+          echo "Using pm2 at \$PM2_BIN"
+          if [ ! -f "${DEPLOY_PATH}/backend/.env" ]; then
+            echo "::error::Missing ${DEPLOY_PATH}/backend/.env — copy from .env.production.example first"
+            exit 1
+          fi
+          cd "${DEPLOY_PATH}/backend"
+          npm ci --omit=dev
+          if sudo env PATH="/opt/node20/bin:\$PATH" "\$PM2_BIN" describe business-application-api >/dev/null 2>&1; then
+            sudo env PATH="/opt/node20/bin:\$PATH" "\$PM2_BIN" restart business-application-api --update-env
+          elif "\$PM2_BIN" describe business-application-api >/dev/null 2>&1; then
+            "\$PM2_BIN" restart business-application-api --update-env
+          else
+            sudo env PATH="/opt/node20/bin:\$PATH" "\$PM2_BIN" start "${DEPLOY_PATH}/deploy/ecosystem.config.cjs" \
+              || "\$PM2_BIN" start "${DEPLOY_PATH}/deploy/ecosystem.config.cjs"
+          fi
+          sudo env PATH="/opt/node20/bin:\$PATH" "\$PM2_BIN" save 2>/dev/null || "\$PM2_BIN" save
+          sleep 2
+          curl -sf http://127.0.0.1:5003/api/health
+          echo ""
+          echo "Backend deploy OK"
+          EOF
+
+  deploy-frontend:
+    name: Deploy frontend (cPanel FTP)
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist
+
+      - name: Validate FTP config
+        env:
+          FTP_SERVER: ${{ secrets.FTP_SERVER }}
+          FTP_USERNAME: ${{ secrets.FTP_USERNAME }}
+          FTP_PASSWORD: ${{ secrets.FTP_PASSWORD }}
+          FTP_SERVER_DIR: ${{ vars.FTP_SERVER_DIR }}
+          FTP_PROTOCOL: ${{ vars.FTP_PROTOCOL }}
+        run: |
+          set -euo pipefail
+          missing=0
+          [ -z "${FTP_SERVER// }" ] && echo "::error::Missing FTP_SERVER secret" && missing=1
+          [ -z "${FTP_USERNAME// }" ] && echo "::error::Missing FTP_USERNAME secret" && missing=1
+          [ -z "${FTP_PASSWORD// }" ] && echo "::error::Missing FTP_PASSWORD secret" && missing=1
+          [ -z "${FTP_SERVER_DIR// }" ] && echo "::error::Missing FTP_SERVER_DIR variable" && missing=1
+          [ "$missing" -eq 0 ] || exit 1
+          host="${FTP_SERVER#ftp://}"
+          host="${host#ftps://}"
+          host="${host#sftp://}"
+          host="${host#https://}"
+          host="${host#http://}"
+          host="${host%%/*}"
+          host="${host%%:*}"
+          if [ -z "$host" ]; then
+            echo "::error::FTP_SERVER is invalid. Use hostname only, e.g. ftp.swiftgd.com"
+            exit 1
+          fi
+          dir="$FTP_SERVER_DIR"
+          dir="${dir#"${dir%%[![:space:]]*}"}"
+          dir="${dir%"${dir##*[![:space:]]}"}"
+          if [[ "$dir" =~ ^/home/[^/]+/(.+)$ ]]; then
+            echo "Normalizing absolute home path → /${BASH_REMATCH[1]}"
+            dir="/${BASH_REMATCH[1]}"
+          fi
+          [[ "$dir" == */ ]] || dir="${dir}/"
+          if [[ "$dir" == /home/* ]]; then
+            echo "::error::FTP_SERVER_DIR must not be /home/... (File Manager path)."
+            echo "Use /business.swiftgd.com/ or /"
+            exit 1
+          fi
+          echo "FTP_HOST=$host" >> "$GITHUB_ENV"
+          echo "FTP_SERVER_DIR=$dir" >> "$GITHUB_ENV"
+          echo "FTP_PROTOCOL=${FTP_PROTOCOL:-ftp}" >> "$GITHUB_ENV"
+          if ! getent hosts "$host" >/dev/null 2>&1; then
+            echo "::error::Cannot resolve FTP host '$host'."
+            exit 1
+          fi
+          echo "FTP host resolves OK"
+          echo "FTP target directory: $dir"
+
+      - name: Show build output
+        run: |
+          echo "Files to upload:"
+          find frontend/dist -type f | sort
+          echo "---"
+          grep -oE 'assets/[^"]+' frontend/dist/index.html || true
+          LOCAL_JS=$(grep -oE 'assets/[^"]+\.js' frontend/dist/index.html | head -1)
+          echo "LOCAL_JS=$LOCAL_JS" >> "$GITHUB_ENV"
+
+      - name: FTP deploy (Python — safe with special passwords)
+        env:
+          FTP_USERNAME: ${{ secrets.FTP_USERNAME }}
+          FTP_PASSWORD: ${{ secrets.FTP_PASSWORD }}
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          import os, ssl, sys
+          from ftplib import FTP, FTP_TLS, error_perm
+          from pathlib import Path
+
+          host = os.environ["FTP_HOST"]
+          user = os.environ["FTP_USERNAME"]
+          password = os.environ["FTP_PASSWORD"]
+          remote_dir = os.environ["FTP_SERVER_DIR"].strip()
+          proto = os.environ.get("FTP_PROTOCOL", "ftp").lower()
+          local_root = Path("frontend/dist")
+          local_js = os.environ.get("LOCAL_JS", "")
+
+          def connect():
+              if proto in ("ftps", "ftps-legacy"):
+                  ctx = ssl.create_default_context()
+                  ctx.check_hostname = False
+                  ctx.verify_mode = ssl.CERT_NONE
+                  ftp = FTP_TLS(context=ctx, timeout=60)
+                  ftp.connect(host, 21)
+                  ftp.login(user, password)
+                  ftp.prot_p()
+                  return ftp
+              ftp = FTP(timeout=60)
+              ftp.connect(host, 21)
+              ftp.login(user, password)
+              return ftp
+
+          def ensure_cwd(ftp, path: str):
+              path = (path or "").strip()
+              if path in ("", "/", "./"):
+                  print("PWD", ftp.pwd())
+                  return
+              path = path.strip("/")
+              errors = []
+              for candidate in (f"/{path}", path):
+                  try:
+                      ftp.cwd(candidate)
+                      print("After cd:", ftp.pwd())
+                      return
+                  except error_perm as e:
+                      errors.append(f"{candidate}: {e}")
+              for reset in ("/", ):
+                  try:
+                      ftp.cwd(reset)
+                  except error_perm:
+                      pass
+              for part in path.split("/"):
+                  if not part:
+                      continue
+                  try:
+                      ftp.cwd(part)
+                  except error_perm as e:
+                      raise SystemExit(
+                          "Cannot cd to FTP_SERVER_DIR="
+                          f"{os.environ.get('FTP_SERVER_DIR')!r}. Tried: {errors}. "
+                          f"Segment {part!r} failed: {e}."
+                      ) from None
+              print("After cd:", ftp.pwd())
+
+          def ensure_dir(ftp, rel: str):
+              parts = [p for p in rel.replace("\\", "/").split("/") if p]
+              for i in range(len(parts)):
+                  sub = "/".join(parts[: i + 1])
+                  try:
+                      ftp.mkd(sub)
+                  except error_perm:
+                      pass
+
+          print(f"Connecting to {host} ({proto}) as {user}")
+          ftp = connect()
+          print("Login OK. Home PWD:", ftp.pwd())
+          print("Home listing:", ftp.nlst()[:40])
+          ensure_cwd(ftp, remote_dir)
+          print("Target listing:", ftp.nlst()[:40])
+
+          uploaded = 0
+          for path in local_root.rglob("*"):
+              if not path.is_file():
+                  continue
+              rel = path.relative_to(local_root).as_posix()
+              parent = str(Path(rel).parent).replace("\\", "/")
+              if parent not in (".", ""):
+                  ensure_dir(ftp, parent)
+              with path.open("rb") as fh:
+                  ftp.storbinary(f"STOR {rel}", fh)
+              uploaded += 1
+              print("uploaded", rel)
+
+          print(f"Uploaded {uploaded} files")
+          if local_js:
+              try:
+                  names = ftp.nlst(str(Path(local_js).parent).replace("\\", "/") or ".")
+              except error_perm:
+                  names = ftp.nlst()
+              base = Path(local_js).name
+              if not any(base in n for n in names):
+                  try:
+                      ftp.size(local_js)
+                  except error_perm as e:
+                      raise SystemExit(f"Built JS missing on FTP after upload: {local_js} ({e})") from e
+              print("Confirmed on FTP:", local_js)
+          ftp.quit()
+          print("FTP deploy OK")
+          PY
+
+      - name: Verify live frontend matches build
+        env:
+          LIVE_SITE_URL: ${{ vars.LIVE_SITE_URL }}
+        run: |
+          set -euo pipefail
+          site="${LIVE_SITE_URL:-https://business.swiftgd.com}"
+          site="${site%/}"
+          local_js="${LOCAL_JS:-}"
+          if [ -z "$local_js" ]; then
+            local_js=$(grep -oE 'assets/[^"]+\.js' frontend/dist/index.html | head -1 || true)
+          fi
+          if [ -z "$local_js" ]; then
+            echo "::error::Could not read JS asset from built index.html"
+            exit 1
+          fi
+
+          fetch_html() {
+            curl -sL --max-time 60 \
+              -A 'Mozilla/5.0 (compatible; BusinessAppDeploy/1.0)' \
+              -H 'Accept: text/html,application/xhtml+xml' \
+              "$1" || true
+          }
+
+          remote_js=""
+          remote_html=""
+          for attempt in 1 2 3 4 5; do
+            sleep $((attempt))
+            for url in "$site/" "$site/index.html"; do
+              remote_html=$(fetch_html "$url")
+              remote_js=$(echo "$remote_html" | grep -oE 'assets/[^"]+\.js' | head -1 || true)
+              echo "Attempt $attempt ($url) — Built: $local_js | Live: ${remote_js:-<not found>}"
+              if [ -n "$remote_js" ] && [ "$local_js" = "$remote_js" ]; then
+                echo "Live frontend matches this build"
+                exit 0
+              fi
+              if echo "$remote_html" | grep -qi '415 Unsupported Media Type'; then
+                code=$(curl -sL -o /dev/null -w '%{http_code}' --max-time 30 -A 'Mozilla/5.0' "$site/$local_js" || true)
+                echo "CDN returned 415 for HTML; asset HTTP $code for $local_js"
+                if [ "$code" = "200" ]; then
+                  echo "Live asset exists (FTP deploy OK)."
+                  exit 0
+                fi
+              fi
+            done
+          done
+
+          echo "::error::Live site does not match this build after retries."
+          echo "Built JS: $local_js"
+          echo "Live JS:  ${remote_js:-<not found>}"
+          echo "Live HTML snippet (first 400 chars):"
+          echo "${remote_html:0:400}"
+          exit 1

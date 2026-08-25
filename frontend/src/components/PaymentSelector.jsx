@@ -1,6 +1,8 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { paymentAccountService } from '../services/paymentAccountService';
 
+const toMoney = (value) => Number((Number(value || 0)).toFixed(2));
+
 /**
  * PaymentSelector — reusable multi-account payment split widget.
  *
@@ -27,14 +29,14 @@ export default function PaymentSelector({ totalAmount = 0, branchId, onChange, d
         setAccounts(list);
         // Initialize with first account, full amount — and immediately notify parent
         if (list.length > 0) {
-          const initialRows = [{ paymentAccountId: list[0].id, amount: totalAmount }];
+          const initialRows = [{ paymentAccountId: list[0].id, amount: toMoney(totalAmount) }];
           setRows(initialRows);
           if (onChange) {
             onChange([{
               paymentAccountId: list[0].id,
               accountName: list[0].name || '',
               accountType: list[0].accountType || 'cash',
-              amount: Number(totalAmount),
+              amount: toMoney(totalAmount),
             }]);
           }
         }
@@ -45,7 +47,7 @@ export default function PaymentSelector({ totalAmount = 0, branchId, onChange, d
   // When totalAmount changes and only one row is present, auto-update its amount
   useEffect(() => {
     if (rows.length === 1) {
-      const updated = [{ ...rows[0], amount: totalAmount }];
+      const updated = [{ ...rows[0], amount: toMoney(totalAmount) }];
       setRows(updated);
       notifyChange(updated);
     }
@@ -63,7 +65,7 @@ export default function PaymentSelector({ totalAmount = 0, branchId, onChange, d
             paymentAccountId: r.paymentAccountId,
             accountName: acc?.name || '',
             accountType: acc?.accountType || 'cash',
-            amount: Number(r.amount),
+            amount: toMoney(r.amount),
           };
         });
       onChange(payments);
@@ -91,13 +93,16 @@ export default function PaymentSelector({ totalAmount = 0, branchId, onChange, d
   const updateRow = (index, field, value) => {
     setRowsAndNotify((prev) => {
       const next = [...prev];
-      next[index] = { ...next[index], [field]: value };
+      next[index] = {
+        ...next[index],
+        [field]: field === 'amount' ? toMoney(value) : value,
+      };
       return next;
     });
   };
 
-  const allocated = rows.reduce((s, r) => s + Number(r.amount || 0), 0);
-  const remaining = totalAmount - allocated;
+  const allocated = toMoney(rows.reduce((s, r) => s + Number(r.amount || 0), 0));
+  const remaining = toMoney(totalAmount - allocated);
   const isBalanced = Math.abs(remaining) < 0.01;
 
   if (loadError) {

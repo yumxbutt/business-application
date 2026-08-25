@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import PageCard from '../components/ui/PageCard';
 import { useAuth } from '../context/AuthContext';
 import { productService } from '../services/productService';
@@ -369,6 +370,7 @@ function VoucherFormModal({ form, setForm, branches, contacts, loadingContacts, 
 // ─── Main Page ───────────────────────────────────────────────────────────────
 export default function CashVoucherPage() {
   const { user } = useAuth();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [generatedOn] = useState(() =>
     new Date().toLocaleString('en-GB', {
       day: '2-digit', month: 'short', year: 'numeric',
@@ -397,6 +399,7 @@ export default function CashVoucherPage() {
   const [error, setError] = useState('');
   const [ledgerBalance, setLedgerBalance] = useState(null);
   const [loadingLedger, setLoadingLedger] = useState(false);
+  const deepLinkHandled = useRef(false);
 
   const activeBranchId = useMemo(() => form.branchId || filters.branchId, [form.branchId, filters.branchId]);
   const selectedBranchName = useMemo(() => {
@@ -406,6 +409,19 @@ export default function CashVoucherPage() {
     if (user && user.role !== 'main_admin') return 'Branch-' + (user.branchId || 'NA');
     return 'Branch-' + (id || 'NA');
   }, [branches, filters.branchId, form.branchId, user]);
+
+  useEffect(() => {
+    if (deepLinkHandled.current) return;
+    const type = searchParams.get('type');
+    const openNew = searchParams.get('new') === '1';
+    if (type !== 'receipt' && type !== 'payment') return;
+
+    deepLinkHandled.current = true;
+    const branchId = filters.branchId || defaultBranchId;
+    setForm({ ...blankForm(branchId), transactionType: type });
+    if (openNew) setShowForm(true);
+    setSearchParams({}, { replace: true });
+  }, [searchParams, filters.branchId, defaultBranchId, setSearchParams]);
 
   useEffect(() => {
     settingsService.getCompanySettings().then(setCompany).catch(() => {});

@@ -5,7 +5,7 @@ Full-stack business management application with multi-branch support for sales, 
 ## Tech Stack
 - Frontend: React + Vite
 - Backend: Node.js + Express
-- Database: PostgreSQL (default) / MySQL
+- Database: MySQL / MariaDB
 - Auth: JWT + role-based access control
 
 ## Project Structure
@@ -22,7 +22,7 @@ cp .env.example .env
 npm install
 npm run dev
 ```
-Backend runs on `http://localhost:5000`.
+Backend runs on `http://localhost:5001`.
 
 ### 2) Frontend setup
 ```bash
@@ -33,11 +33,15 @@ npm run dev
 Frontend runs on `http://localhost:5173` (or next available port).
 
 ## Database Setup
-Create database `business_management` in PostgreSQL and run:
+Create a local MySQL/MariaDB database named `business_management` and run the backend.
 
 ```bash
-psql -U postgres -d business_management -f backend/database/schema.sql
+mysql -u root -p -e "CREATE DATABASE IF NOT EXISTS business_management CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
 ```
+
+The backend bootstraps its own tables and seed data on startup.
+
+If you want to use a different MySQL user or host, set the values in `backend/.env` before running `npm run dev`.
 
 ## Initial Modules Planned
 - Authentication and access control (main login + branch login)
@@ -116,9 +120,29 @@ psql -U postgres -d business_management -f backend/database/schema.sql
 - `PATCH /api/users/:id/status` (activate/deactivate user)
 - `GET /api/branches` (for role-aware branch selection)
 
+## Implemented Modules
+
+- Authentication, users, access rights (granular RBAC on reports, expenses, inventory)
+- Branch management (create/edit/deactivate)
+- Products, sales, purchases, returns
+- Inventory (FIFO), stock transfers between branches
+- Contacts, ledger, receivables, payables, cash vouchers
+- Standalone expense register
+- Reports hub (sales, purchase, P/L, ledger)
+- Admin dashboard and login activity audit
+
+## Key API Routes
+
+- `GET/POST /api/branches`, `PUT /api/branches/:id`, `PATCH /api/branches/:id/status`
+- `GET/POST /api/expenses`, `PATCH /api/expenses/:id/cancel`
+- `GET/POST /api/inventory/transfers`, `PATCH /api/inventory/transfers/:id/cancel`
+- `GET /api/reports/sales-summary`, `/purchase-summary`, `/profit-loss`
+- `GET /api/auth/login-activities` (main admin)
+- `PUT /api/sales/:id` (invoice edit)
+
 ## Next Development Steps
-1. Implement auth and RBAC middleware.
-2. Add Sequelize models and migrations.
-3. Build module-wise APIs.
-4. Integrate frontend dashboards and forms.
-5. Add reporting and export features.
+
+1. Extend granular RBAC to all remaining routes (sales, purchase, products).
+2. Re-login after access rights change (or add token refresh endpoint).
+3. PDF export templates for reports and vouchers.
+4. Chart of accounts management UI.

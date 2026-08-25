@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import '../ui-kit/modal-zfix.css';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { useAccess } from '../hooks/useAccess';
 import PageCard from '../components/ui/PageCard';
 import Button from '../ui-kit/Button';
 import { Select, Input } from '../ui-kit';
@@ -40,18 +41,40 @@ const defaultItem = {
   productName: '',
   quantity: '1',
   currentStock: null,
+  currentBranchAvailable: null,
+  sourceBranchId: '',
+  stockOptions: [],
   unitPrice: '0',
   salePrice: '0',
   notes: '',
   unitId: '',
-  units: [],        // available units for the selected product
+  units: [],
+  conversionFactor: '1',
 };
+
+const defaultAdditionalExpenses = [
+  { name: 'Loading', amount: '0' },
+  { name: 'UnLoading', amount: '0' },
+  { name: 'Freight', amount: '0' },
+  { name: 'Others', amount: '0' },
+];
 
 const toNumber = (value) => Number(value || 0);
 const fmtBal = (n) => {
   if (n === null || n === undefined || Number.isNaN(Number(n))) return '–';
   const v = Number(n);
   return `${Math.abs(v).toFixed(2)} ${v >= 0 ? 'Dr' : 'Cr'}`;
+};
+const formatQty = (value) => {
+  const n = toNumber(value);
+  if (!Number.isFinite(n)) return '0';
+  return Number.isInteger(n) ? String(n) : n.toFixed(1);
+};
+const getSellableQtyInSelectedUnit = (baseQty, conversionFactor) => {
+  const factor = toNumber(conversionFactor) || 1;
+  const qty = toNumber(baseQty) / factor;
+  if (factor > 1) return Math.floor(Math.max(0, qty));
+  return Math.max(0, qty);
 };
 
 // Utility to summarize overall stock (all branches)
@@ -75,6 +98,9 @@ function getOverallStockSummary(stockOptions = []) {
 export default function PurchasePage({ createMode = false }) {
   const navigate = useNavigate();
   const { user } = useAuth();
+  const { has } = useAccess();
+  const canCreatePurchase = has('purchase:create');
+  const canReturnPurchase = has('purchase:return');
   const [purchases, setPurchases] = useState([]);
   const [suppliers, setSuppliers] = useState([]);
   const [branches, setBranches] = useState([]);
@@ -90,6 +116,7 @@ export default function PurchasePage({ createMode = false }) {
   const [createdPurchase, setCreatedPurchase] = useState(null);
   const [formData, setFormData] = useState(defaultForm);
   const [items, setItems] = useState([{ ...defaultItem }]);
+  const [additionalExpenses, setAdditionalExpenses] = useState(defaultAdditionalExpenses.map((row) => ({ ...row })));
   const [purchasePayments, setPurchasePayments] = useState([]);
 
   // Example: Modern ActionCard usage for dashboard stats (replace with real data)
@@ -121,6 +148,7 @@ export default function PurchasePage({ createMode = false }) {
   // Per-item product search state: array of { query, results, open, units }
   const [itemSearch, setItemSearch] = useState([{ query: '', results: [], open: false, units: [] }]);
   const searchTimers = useRef([]);
+  const defaultSourceBranchId = String(user?.role === 'main_admin' ? (formData.branchId || '') : (user?.branchId || ''));
 
   const loadPurchases = async (nextFilters = filters) => {
     setLoading(true);
@@ -155,7 +183,8 @@ export default function PurchasePage({ createMode = false }) {
       purchaseDate: new Date().toISOString().split('T')[0],
       branchId: initialBranchId,
     });
-    setItems([{ ...defaultItem }]);
+    setItems([{ ...defaultItem, sourceBranchId: initialBranchId }]);
+    setAdditionalExpenses(defaultAdditionalExpenses.map((row) => ({ ...row })));
     setItemSearch([{ query: '', results: [], open: false, units: [] }]);
   }, [user?.branchId, user?.role]);
 
@@ -200,19 +229,46 @@ export default function PurchasePage({ createMode = false }) {
     resetCreateForm();
   }, [createMode, resetCreateForm]);
 
+  useEffect(() => {
+    if (!createMode) return;
+    setItems((prev) => prev.map((item) => ({
+      ...item,
+      sourceBranchId: item.sourceBranchId || defaultSourceBranchId,
+    })));
+  }, [createMode, defaultSourceBranchId]);
+
+  const deriveBalanceSummary = useCallback((purchaseRecord, overrideCurrentAfter) => {
+    if (!purchaseRecord) return { previousBalance: undefined, netBalance: undefined };
+
+    const currentAfter =
+      overrideCurrentAfter !== undefined && overrideCurrentAfter !== null
+        ? Number(overrideCurrentAfter)
+        : purchaseRecord?._balanceSummary?.netBalance !== undefined
+          ? Number(purchaseRecord._balanceSummary.netBalance)
+          : purchaseRecord?.contactBalance !== undefined && purchaseRecord?.contactBalance !== null
+            ? Number(purchaseRecord.contactBalance)
+            : undefined;
+
+    if (currentAfter === undefined || Number.isNaN(currentAfter)) {
+      return { previousBalance: undefined, netBalance: undefined };
+    }
+
+    return {
+      previousBalance: Number(currentAfter + toNumber(purchaseRecord.dueAmount || 0)),
+      netBalance: Number(currentAfter),
+    };
+  }, []);
+
   const printPurchase = (p, balances = {}) => {
     if (!p) return;
+    const fallbackSummary = deriveBalanceSummary(p, viewLedgerBalance);
     const hasBalanceSummary = balances.previousBalance !== undefined && balances.netBalance !== undefined;
     const currentAfter = hasBalanceSummary
       ? Number(balances.netBalance)
-      : viewLedgerBalance !== null
-        ? Number(viewLedgerBalance)
-        : undefined;
+      : fallbackSummary.netBalance;
     const previousBefore = hasBalanceSummary
       ? Number(balances.previousBalance)
-      : currentAfter !== undefined
-        ? currentAfter + Number(p.totalAmount || 0)
-        : undefined;
+      : fallbackSummary.previousBalance;
     const itemRows = (p.items || []).map((item, i) =>
       `<tr>
         <td>${i + 1}</td>
@@ -239,6 +295,10 @@ export default function PurchasePage({ createMode = false }) {
       </table>
       <div class="tot" style="margin-top:14px">
         <div class="tot-row"><span>Sub Total</span><span>${fmtNum(p.subTotal)}</span></div>
+        ${(p.additionalExpenses || []).map((exp) =>
+          `<div class="tot-row"><span>${exp.name}</span><span>${fmtNum(exp.amount)}</span></div>`
+        ).join('')}
+        <div class="tot-row"><span>Additional Expenses</span><span>${fmtNum(p.additionalExpensesTotal || 0)}</span></div>
         <div class="tot-row"><span>Discount</span><span>(${fmtNum(p.discount)})</span></div>
         <div class="tot-row"><span>Total</span><span>${fmtNum(p.totalAmount)}</span></div>
         <div class="tot-row"><span>Paid</span><span>${fmtNum(p.paidAmount)}</span></div>
@@ -338,12 +398,43 @@ export default function PurchasePage({ createMode = false }) {
     const subTotal = items.reduce((sum, item) => {
       return sum + toNumber(item.quantity) * toNumber(item.unitPrice);
     }, 0);
+    const additionalExpensesTotal = additionalExpenses.reduce(
+      (sum, expense) => sum + toNumber(expense.amount),
+      0
+    );
     const discount = toNumber(formData.discount);
     const paidAmount = toNumber(formData.paidAmount);
-    const totalAmount = Math.max(0, subTotal - discount);
+    const totalAmount = Math.max(0, subTotal + additionalExpensesTotal - discount);
     const dueAmount = Math.max(0, totalAmount - paidAmount);
-    return { subTotal, totalAmount, dueAmount };
-  }, [items, formData.discount, formData.paidAmount]);
+    return { subTotal, additionalExpensesTotal, totalAmount, dueAmount };
+  }, [items, additionalExpenses, formData.discount, formData.paidAmount]);
+
+  const updateAdditionalExpense = (index, field, value) => {
+    setAdditionalExpenses((prev) => {
+      const next = [...prev];
+      next[index] = { ...next[index], [field]: value };
+      return next;
+    });
+  };
+
+  const addAdditionalExpense = () => {
+    setAdditionalExpenses((prev) => [...prev, { name: '', amount: '0' }]);
+  };
+
+  const removeAdditionalExpense = (index) => {
+    setAdditionalExpenses((prev) => prev.filter((_, idx) => idx !== index));
+  };
+
+  const buildAdditionalExpensesPayload = () => {
+    return additionalExpenses
+      .map((expense, idx) => {
+        const amount = toNumber(expense.amount);
+        if (amount <= 0) return null;
+        const name = String(expense.name || '').trim() || `Expense ${idx + 1}`;
+        return { name, amount };
+      })
+      .filter(Boolean);
+  };
 
   const openCreate = () => {
     if (!createMode) {
@@ -366,6 +457,15 @@ export default function PurchasePage({ createMode = false }) {
         paidAmount: String(detail.paidAmount || '0'),
         branchId: String(detail.branchId || ''),
       });
+      setAdditionalExpenses(
+        (detail.additionalExpenses && detail.additionalExpenses.length
+          ? detail.additionalExpenses
+          : defaultAdditionalExpenses
+        ).map((expense, idx) => ({
+          name: String(expense?.name || `Expense ${idx + 1}`),
+          amount: String(expense?.amount || '0'),
+        }))
+      );
 
       // Fetch units per item in parallel
       const itemUnitsArr = await Promise.all(
@@ -376,23 +476,49 @@ export default function PurchasePage({ createMode = false }) {
         })
       );
 
-      const mappedItems = (detail.items || []).map((item, idx) => ({
-        productId: String(item.productId || ''),
-        productName: item.product?.name || '',
-        quantity: String(item.unitQty ?? item.quantity ?? '1'),
-        unitPrice: String(item.unitPrice || '0'),
-        salePrice: String(item.salePrice || '0'),
-        notes: item.notes || '',
-        unitId: item.unitId ? String(item.unitId) : '',
-        units: itemUnitsArr[idx] || [],
-      }));
+      const mappedItems = (detail.items || []).map((item, idx) => {
+        const normalizedUnits = (itemUnitsArr[idx] || [])
+          .map((u) => ({
+            unitId: String(u.unitId || u.unit?.id || ''),
+            unitName: u.unit?.name || u.unitName || u.unit?.code || 'Unit',
+            conversionFactor: String(toNumber(u.conversionFactor) || 1),
+            isPurchaseUnit: Boolean(u.isPurchaseUnit),
+            isBaseUnit: Boolean(u.isBaseUnit) || toNumber(u.conversionFactor) === 1,
+          }))
+          .filter((u) => u.unitId)
+          .sort((a, b) => toNumber(b.conversionFactor) - toNumber(a.conversionFactor));
+        const selectedUnit = normalizedUnits.find((u) => String(u.unitId) === String(item.unitId));
+        const fallbackUnit = normalizedUnits.find((u) => u.isPurchaseUnit) || normalizedUnits.find((u) => u.isBaseUnit) || normalizedUnits[0];
+        const chosenUnit = selectedUnit || fallbackUnit;
+        const chosenFactor = toNumber(chosenUnit?.conversionFactor) || toNumber(item.conversionFactor) || 1;
+
+        return {
+          productId: String(item.productId || ''),
+          productName: item.product?.name || '',
+          quantity: String(item.unitQty ?? item.quantity ?? '1'),
+          unitPrice: String(toNumber(item.unitPrice || 0) * chosenFactor),
+          salePrice: String(toNumber(item.salePrice || 0) * chosenFactor),
+          notes: item.notes || '',
+          unitId: chosenUnit ? String(chosenUnit.unitId) : '',
+          units: normalizedUnits,
+          conversionFactor: String(chosenFactor),
+          sourceBranchId: String(item.sourceBranchId || detail.branchId || defaultSourceBranchId || ''),
+          stockOptions: [],
+          currentBranchAvailable: null,
+        };
+      });
       setItems(mappedItems);
       setItemSearch(mappedItems.map((item, idx) => ({
         query: item.productName,
         results: [],
         open: false,
-        units: itemUnitsArr[idx] || [],
+        units: item.units || [],
       })));
+      mappedItems.forEach((item, idx) => {
+        if (item.productId) {
+          fetchCurrentStockForRow(idx, item.productId);
+        }
+      });
       setIsModalOpen(true);
     } catch (err) {
       setError(err.message);
@@ -404,10 +530,17 @@ export default function PurchasePage({ createMode = false }) {
     setViewLedgerBalance(null);
     try {
       const detail = await purchaseService.getPurchase(purchase.id);
+      setViewLedgerBalance(
+        detail?.contactBalance !== undefined && detail?.contactBalance !== null
+          ? Number(detail.contactBalance)
+          : null
+      );
       setViewPurchase(detail);
       setIsViewModalOpen(true);
       if (detail.contact?.id) {
-        ledgerService.getContactLedger(detail.contact.id)
+        ledgerService.getContactLedger(detail.contact.id, {
+          branchId: detail.branchId ? Number(detail.branchId) : undefined,
+        })
           .then((data) => {
             const entries = data.entries || [];
             const last = entries[entries.length - 1];
@@ -500,7 +633,16 @@ export default function PurchasePage({ createMode = false }) {
     // Clear product selection when typing
     setItems((prev) => {
       const next = [...prev];
-      next[index] = { ...next[index], productId: '', productName: query };
+      next[index] = {
+        ...next[index],
+        productId: '',
+        productName: query,
+        unitId: '',
+        units: [],
+        conversionFactor: '1',
+        stockOptions: [],
+        currentBranchAvailable: null,
+      };
       return next;
     });
     triggerProductSearch(index, query);
@@ -522,7 +664,11 @@ export default function PurchasePage({ createMode = false }) {
       const row = (stockRows || []).find((entry) => String(entry.productId) === String(productId));
       setItems((prev) => {
         const next = [...prev];
-        next[index] = { ...next[index], currentStock: row ? Number(row.baseQty || 0) : 0 };
+        next[index] = {
+          ...next[index],
+          currentStock: row ? Number(row.baseQty || 0) : 0,
+          currentBranchAvailable: row ? Number(row.baseQty || 0) : 0,
+        };
         return next;
       });
     } catch {
@@ -535,16 +681,26 @@ export default function PurchasePage({ createMode = false }) {
   }, [formData.branchId, user?.branchId, user?.role]);
 
   const selectProduct = async (index, product) => {
+    const purchaseBranchId = Number(formData.branchId || user?.branchId || 0);
+    const branchPool = branches.length
+      ? branches
+      : (purchaseBranchId ? [{ id: purchaseBranchId, name: `Branch-${purchaseBranchId}` }] : []);
+
     setItems((prev) => {
       const next = [...prev];
+      const existingSourceBranchId = next[index]?.sourceBranchId || (purchaseBranchId ? String(purchaseBranchId) : '');
       next[index] = {
         ...next[index],
         productId: String(product.id),
         productName: product.name,
+        sourceBranchId: existingSourceBranchId,
         unitPrice: String(product.purchasePrice || '0'),
         salePrice: String(product.salePrice || '0'),
         unitId: '',
         units: [],
+        conversionFactor: '1',
+        stockOptions: [],
+        currentBranchAvailable: null,
       };
       return next;
     });
@@ -554,28 +710,80 @@ export default function PurchasePage({ createMode = false }) {
       return next;
     });
 
-    // Asynchronously fetch product units
     try {
-      const units = await productService.getProductUnits(product.id);
+      const [unitRows, options] = await Promise.all([
+        productService.getProductUnits(product.id).catch(() => []),
+        Promise.all(
+          branchPool.map(async (branch) => {
+            let availableQty = 0;
+            let breakdown = [];
+
+            try {
+              const stock = await inventoryService.getProductStock(branch.id, product.id, { mode: 'all' });
+              availableQty = toNumber(stock.baseQty);
+              breakdown = stock?.breakdown || [];
+            } catch {
+              availableQty = 0;
+              breakdown = [];
+            }
+
+            return {
+              branchId: Number(branch.id),
+              branchName: branch.name,
+              availableQty,
+              breakdown,
+            };
+          })
+        ),
+      ]);
+
       setItems((prev) => {
         const next = [...prev];
-        // If there is exactly one unit (or a default purchase unit), pre-select it
-        const defaultUnit = units.find((u) => u.isPurchaseUnit) || (units.length === 1 ? units[0] : null);
+        const current = next[index];
+        if (!current || String(current.productId) !== String(product.id)) return prev;
+
+        const units = (unitRows || [])
+          .map((u) => ({
+            unitId: String(u.unitId || u.unit?.id || ''),
+            unitName: u.unit?.name || u.unitName || u.unit?.code || 'Unit',
+            unitCode: u.unit?.code || u.unitCode || '',
+            conversionFactor: String(toNumber(u.conversionFactor) || 1),
+            isPurchaseUnit: Boolean(u.isPurchaseUnit),
+            isBaseUnit: Boolean(u.isBaseUnit) || toNumber(u.conversionFactor) === 1,
+          }))
+          .filter((u) => u.unitId)
+          .sort((a, b) => toNumber(b.conversionFactor) - toNumber(a.conversionFactor));
+        const normalizedUnits = units.length
+          ? units
+          : [{ unitId: 'base', unitName: 'Base Unit', unitCode: 'BASE', conversionFactor: '1', isPurchaseUnit: true, isBaseUnit: true }];
+
+        const selected = options.find((o) => String(o.branchId) === String(current.sourceBranchId))
+          || options.find((o) => o.availableQty > 0)
+          || options[0];
+
+        const preferredUnit =
+          normalizedUnits.find((u) => u.isPurchaseUnit)
+          || normalizedUnits.find((u) => u.isBaseUnit)
+          || normalizedUnits[0]
+          || { unitId: '', conversionFactor: '1' };
+        const factor = toNumber(preferredUnit.conversionFactor) || 1;
+
         next[index] = {
-          ...next[index],
-          units,
-          unitId: defaultUnit ? String(defaultUnit.unitId) : '',
+          ...current,
+          units: normalizedUnits,
+          unitId: preferredUnit.unitId,
+          conversionFactor: String(factor),
+          unitPrice: String(toNumber(product.purchasePrice || 0) * factor),
+          salePrice: String(toNumber(product.salePrice || 0) * factor),
+          stockOptions: options,
+          sourceBranchId: selected ? String(selected.branchId) : current.sourceBranchId,
+          currentBranchAvailable: selected ? toNumber(selected.availableQty) : current.currentBranchAvailable,
         };
         return next;
       });
-      setItemSearch((prev) => {
-        const next = [...prev];
-        next[index] = { ...next[index], units };
-        return next;
-      });
+
       fetchCurrentStockForRow(index, product.id);
     } catch {
-      // silent — unit dropdown just stays empty
       fetchCurrentStockForRow(index, product.id);
     }
   };
@@ -592,6 +800,41 @@ export default function PurchasePage({ createMode = false }) {
     setItems((prev) => {
       const next = [...prev];
       next[index] = { ...next[index], [field]: value };
+      return next;
+    });
+  };
+
+  const onItemUnitChange = (index, unitId) => {
+    setItems((prev) => {
+      const next = [...prev];
+      const row = next[index];
+      const selectedUnit = (row.units || []).find((u) => String(u.unitId) === String(unitId));
+      const factor = toNumber(selectedUnit?.conversionFactor) || 1;
+      const previousFactor = toNumber(row.conversionFactor) || 1;
+      const baseCost = toNumber(row.unitPrice) / previousFactor;
+      const baseSale = toNumber(row.salePrice) / previousFactor;
+
+      next[index] = {
+        ...row,
+        unitId,
+        conversionFactor: String(factor),
+        unitPrice: String(baseCost * factor),
+        salePrice: String(baseSale * factor),
+      };
+      return next;
+    });
+  };
+
+  const onItemSourceBranchChange = (index, sourceBranchId) => {
+    setItems((prev) => {
+      const next = [...prev];
+      const row = next[index];
+      const option = (row.stockOptions || []).find((o) => String(o.branchId) === String(sourceBranchId));
+      next[index] = {
+        ...row,
+        sourceBranchId,
+        currentBranchAvailable: option ? toNumber(option.availableQty) : row.currentBranchAvailable,
+      };
       return next;
     });
   };
@@ -618,6 +861,7 @@ export default function PurchasePage({ createMode = false }) {
         billNo: formData.billNo,
         purchaseDate: formData.purchaseDate,
         discount: toNumber(formData.discount),
+        additionalExpenses: buildAdditionalExpensesPayload(),
         paidAmount: toNumber(formData.paidAmount),
         payments: toNumber(formData.paidAmount) > 0 ? purchasePayments : [],
         items: items.map((item) => ({
@@ -627,6 +871,7 @@ export default function PurchasePage({ createMode = false }) {
           salePrice: item.salePrice !== '' ? toNumber(item.salePrice) : null,
           notes: item.notes || null,
           unitId: item.unitId ? Number(item.unitId) : null,
+          conversionFactor: toNumber(item.conversionFactor) || 1,
         })),
       };
       if (editingPurchaseId) {
@@ -676,8 +921,8 @@ export default function PurchasePage({ createMode = false }) {
     <form className="auth-form modal-form" onSubmit={submitPurchase}>
       {error ? <p className="error-text">{error}</p> : null}
 
-      {user?.role === 'main_admin' ? (
-        <div className="modal-form-grid">
+      <div className="modal-form-grid" style={{ gridTemplateColumns: '1fr 220px', alignItems: 'start', columnGap: '0.75rem' }}>
+        {user?.role === 'main_admin' ? (
           <label className="form-field" htmlFor="purchaseBranchId">
             <span>Branch *</span>
             <Select
@@ -689,10 +934,27 @@ export default function PurchasePage({ createMode = false }) {
               required
             />
           </label>
-        </div>
-      ) : null}
+        ) : (
+          <label className="form-field" htmlFor="purchaseBranchReadonly">
+            <span>Branch</span>
+            <input id="purchaseBranchReadonly" value={selectedBranchName} readOnly />
+          </label>
+        )}
 
-      <div className="modal-form-grid">
+        <label className="form-field" htmlFor="purchaseDate" style={{ textAlign: 'right' }}>
+          <span style={{ display: 'block' }}>Purchase Date *</span>
+          <input
+            id="purchaseDate"
+            name="purchaseDate"
+            type="date"
+            value={formData.purchaseDate}
+            onChange={onFormChange}
+            required
+          />
+        </label>
+      </div>
+
+      <div className="modal-form-grid" style={{ gridTemplateColumns: '1fr 220px', alignItems: 'end', columnGap: '0.75rem' }}>
         <label className="form-field" htmlFor="purchaseSupplier">
           <span>Supplier *</span>
           <Select
@@ -703,10 +965,26 @@ export default function PurchasePage({ createMode = false }) {
             options={[{ value: '', label: 'Select supplier' }, ...(suppliers || []).map((s) => ({ value: String(s.id), label: s.name }))]}
             required
           />
+          {supplierLedgerBalance !== null ? (
+            <div style={{ marginTop: '0.35rem', fontSize: '0.82rem', display: 'flex', alignItems: 'center', gap: '0.9rem', flexWrap: 'wrap' }}>
+              <span style={{ color: '#6b7280', whiteSpace: 'nowrap' }}>Previous Balance:</span>
+              <strong style={{ color: supplierLedgerBalance >= 0 ? '#15803d' : '#dc2626', whiteSpace: 'nowrap' }}>
+                {fmtBal(supplierLedgerBalance)}
+              </strong>
+              {totals.dueAmount > 0 ? (
+                <>
+                  <span style={{ color: '#6b7280', whiteSpace: 'nowrap' }}>Net Balance:</span>
+                  <strong style={{ color: (supplierLedgerBalance + totals.dueAmount) >= 0 ? '#15803d' : '#dc2626', whiteSpace: 'nowrap' }}>
+                    {fmtBal(supplierLedgerBalance + totals.dueAmount)}
+                  </strong>
+                </>
+              ) : null}
+            </div>
+          ) : null}
         </label>
 
-        <label className="form-field" htmlFor="purchaseBillNo">
-          <span>Bill No *</span>
+        <label className="form-field" htmlFor="purchaseBillNo" style={{ alignSelf: 'start' }}>
+          <span style={{ display: 'block', textAlign: 'right' }}>Bill No *</span>
           <input
             id="purchaseBillNo"
             name="billNo"
@@ -714,63 +992,7 @@ export default function PurchasePage({ createMode = false }) {
             onChange={onFormChange}
             required
             placeholder="e.g. BILL-1001"
-          />
-        </label>
-      </div>
-
-      {supplierLedgerBalance !== null ? (
-        <div style={{ marginTop: '-0.35rem', marginBottom: '0.75rem', fontSize: '0.82rem' }}>
-          <span style={{ color: '#6b7280' }}>Previous Balance: </span>
-          <strong style={{ color: supplierLedgerBalance >= 0 ? '#15803d' : '#dc2626' }}>
-            {fmtBal(supplierLedgerBalance)}
-          </strong>
-          {totals.dueAmount > 0 ? (
-            <span style={{ marginLeft: 24 }}>
-              <span style={{ color: '#6b7280' }}>Net Balance: </span>
-              <strong style={{ color: (supplierLedgerBalance + totals.dueAmount) >= 0 ? '#15803d' : '#dc2626' }}>
-                {fmtBal(supplierLedgerBalance + totals.dueAmount)}
-              </strong>
-            </span>
-          ) : null}
-        </div>
-      ) : null}
-
-      <div className="modal-form-grid">
-        <label className="form-field" htmlFor="purchaseDate">
-          <span>Purchase Date *</span>
-          <input
-            id="purchaseDate"
-            name="purchaseDate"
-            type="date"
-            value={formData.purchaseDate}
-            onChange={onFormChange}
-            required
-          />
-        </label>
-
-        <label className="form-field" htmlFor="purchaseDiscount">
-          <span>Discount</span>
-          <input
-            id="purchaseDiscount"
-            name="discount"
-            type="number"
-            min="0"
-            step="0.01"
-            value={formData.discount}
-            onChange={onFormChange}
-          />
-        </label>
-
-        <label className="form-field" htmlFor="purchasePaidAmount">
-          <span>Paid Amount</span>
-          <input
-            id="purchasePaidAmount"
-            name="paidAmount"
-            type="number"
-            min="0"
-            step="0.01"
-            value={formData.paidAmount}
-            onChange={onFormChange}
+            style={{ textAlign: 'right' }}
           />
         </label>
       </div>
@@ -848,12 +1070,12 @@ export default function PurchasePage({ createMode = false }) {
               if (selected) {
                 const unitText = (selected.breakdown || [])
                   .filter((b) => toNumber(b.qty) > 0)
-                  .map((b) => `${Number(b.qty)} ${b.unitCode || b.unitName || ''}`.trim())
+                  .map((b) => `${formatQty(b.qty)} ${b.unitCode || b.unitName || ''}`.trim())
                   .join(' + ');
-                const availableInSelectedUnit = Math.floor((toNumber(selected.availableQty) || 0) / (factor || 1));
+                const availableInSelectedUnit = getSellableQtyInSelectedUnit(toNumber(selected.availableQty), factor);
                 availableDisplay = (
                   <div>
-                    <div>{availableInSelectedUnit}</div>
+                    <div>{formatQty(availableInSelectedUnit)}</div>
                     {unitText ? (
                       <div style={{ fontSize: '0.72rem', color: '#6b7280' }}>{unitText}</div>
                     ) : null}
@@ -863,19 +1085,7 @@ export default function PurchasePage({ createMode = false }) {
                   </div>
                 );
               } else if (item.currentStock !== null && item.currentStock !== undefined) {
-                availableDisplay = Math.floor(toNumber(item.currentStock) / (factor || 1));
-              }
-
-              // Show overall stock (all branches) as in sales invoice
-              let overallStockDisplay = null;
-              if (item.stockOptions && item.stockOptions.length > 0) {
-                const overall = getOverallStockSummary(item.stockOptions);
-                overallStockDisplay = (
-                  <span style={{ fontSize: '0.72rem', color: '#64748b', display: 'block', marginTop: 3 }}>
-                    Stock (All Branches): {overall.totalAvailable}
-                    {overall.unitText ? ` (${overall.unitText})` : ''}
-                  </span>
-                );
+                availableDisplay = formatQty(getSellableQtyInSelectedUnit(toNumber(item.currentStock), factor));
               }
 
               return (
@@ -883,7 +1093,7 @@ export default function PurchasePage({ createMode = false }) {
                   <td>
                     <Select
                       value={item.sourceBranchId}
-                      onChange={(e) => onItemChange(index, 'sourceBranchId', e.target.value)}
+                      onChange={(e) => onItemSourceBranchChange(index, e.target.value)}
                       options={branchOptions}
                       required
                     />
@@ -903,7 +1113,7 @@ export default function PurchasePage({ createMode = false }) {
                       const overall = getOverallStockSummary(item.stockOptions);
                       return (
                         <span style={{ fontSize: '0.72rem', color: '#64748b', display: 'block', marginTop: 3 }}>
-                          {overall.totalAvailable}
+                          {formatQty(overall.totalAvailable)}
                           {overall.unitText ? ` (${overall.unitText})` : ''}
                         </span>
                       );
@@ -928,8 +1138,8 @@ export default function PurchasePage({ createMode = false }) {
                       <Select
                         className="form-input-sm"
                         value={item.unitId}
-                        onChange={(e) => onItemChange(index, 'unitId', e.target.value)}
-                        options={[{ value: '', label: '— base unit —' }, ...(item.units || []).map((u) => ({ value: String(u.unitId || u.unit?.id), label: `${u.unit?.name || u.unit?.code || `Unit #${u.unitId}`}${u.conversionFactor && u.conversionFactor !== 1 ? ` (×${u.conversionFactor})` : ''}` }))]}
+                        onChange={(e) => onItemUnitChange(index, e.target.value)}
+                        options={(item.units || []).map((u) => ({ value: String(u.unitId), label: `${u.unitName}${toNumber(u.conversionFactor) !== 1 ? ` (×${u.conversionFactor})` : ''}` }))}
                       />
                     ) : (
                       <span style={{ fontSize: '0.78rem', color: '#9ca3af' }}>—</span>
@@ -938,7 +1148,7 @@ export default function PurchasePage({ createMode = false }) {
                   <td className="text-right">{availableDisplay}</td>
                   <td>
                     <Input
-                      className=""
+                      className="no-spinner"
                       type="number"
                       min="0.0001"
                       step="0.0001"
@@ -949,7 +1159,7 @@ export default function PurchasePage({ createMode = false }) {
                   </td>
                   <td>
                     <Input
-                      className=""
+                      className="no-spinner"
                       type="number"
                       min="0"
                       step="0.01"
@@ -960,7 +1170,7 @@ export default function PurchasePage({ createMode = false }) {
                   </td>
                   <td>
                     <Input
-                      className=""
+                      className="no-spinner"
                       type="number"
                       min="0"
                       step="0.01"
@@ -1001,8 +1211,46 @@ export default function PurchasePage({ createMode = false }) {
         </button>
       </div>
 
+      <div style={{ marginTop: '0.6rem', display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
+        <div style={{ fontSize: '0.82rem', fontWeight: 600, marginBottom: '0.45rem', width: '420px', textAlign: 'right' }}>Additional Expenses</div>
+        <div style={{ display: 'grid', gap: '0.45rem', width: '420px' }}>
+          {additionalExpenses.map((expense, index) => (
+            <div key={`purchase-expense-${index}`} style={{ display: 'grid', gridTemplateColumns: '1fr 120px 40px', gap: '0.4rem', alignItems: 'end' }}>
+              <Input
+                type="text"
+                value={expense.name}
+                placeholder="Expense name"
+                onChange={(e) => updateAdditionalExpense(index, 'name', e.target.value)}
+              />
+              <Input
+                className="no-spinner"
+                type="number"
+                min="0"
+                step="0.01"
+                value={expense.amount}
+                onChange={(e) => updateAdditionalExpense(index, 'amount', e.target.value)}
+              />
+              <button
+                type="button"
+                className="table-action-button table-action-button--danger"
+                onClick={() => removeAdditionalExpense(index)}
+                disabled={additionalExpenses.length === 1}
+              >
+                ✕
+              </button>
+            </div>
+          ))}
+        </div>
+        <div className="inline-actions inline-actions--end" style={{ marginTop: '0.45rem', width: '420px', justifyContent: 'flex-end' }}>
+          <button type="button" className="secondary-action-button" onClick={addAdditionalExpense}>
+            + Add Expense
+          </button>
+        </div>
+      </div>
+
       <div className="totals-panel">
         <div className="totals-row"><span>Sub Total</span><span>{totals.subTotal.toFixed(2)}</span></div>
+        <div className="totals-row"><span>Additional Expenses</span><span>{totals.additionalExpensesTotal.toFixed(2)}</span></div>
         <div className="totals-row"><span>Discount</span><span>({toNumber(formData.discount).toFixed(2)})</span></div>
         <div className="totals-row totals-row--total"><span>Total</span><span>{totals.totalAmount.toFixed(2)}</span></div>
         <div className="totals-row"><span>Paid</span><span>{toNumber(formData.paidAmount).toFixed(2)}</span></div>
@@ -1128,9 +1376,11 @@ export default function PurchasePage({ createMode = false }) {
         title="Purchases"
         subtitle="Create and manage supplier purchase bills with FIFO inventory tracking"
         actions={
-          <Button type="button" variant="primary" className="no-print" onClick={openCreate}>
-            Add Purchase
-          </Button>
+          canCreatePurchase ? (
+            <Button type="button" variant="primary" className="no-print" onClick={openCreate}>
+              Add Purchase
+            </Button>
+          ) : null
         }
       >
         {error ? <p className="error-text">{error}</p> : null}
@@ -1241,30 +1491,36 @@ export default function PurchasePage({ createMode = false }) {
                         >
                           View
                         </button>
-                        <button
-                          type="button"
-                          className="table-action-button"
-                          onClick={() => openEdit(row)}
-                          disabled={row.status === 'cancelled'}
-                        >
-                          Edit
-                        </button>
-                        <button
-                          type="button"
-                          className="table-action-button"
-                          onClick={() => navigate(`/purchase-returns?purchaseId=${row.id}&billNo=${encodeURIComponent(row.billNo)}`)}
-                          disabled={row.status === 'cancelled'}
-                        >
-                          Return
-                        </button>
-                        <button
-                          type="button"
-                          className="table-action-button table-action-button--danger"
-                          onClick={() => onCancelPurchase(row)}
-                          disabled={row.status === 'cancelled'}
-                        >
-                          Cancel
-                        </button>
+                        {canCreatePurchase ? (
+                          <button
+                            type="button"
+                            className="table-action-button"
+                            onClick={() => openEdit(row)}
+                            disabled={row.status === 'cancelled'}
+                          >
+                            Edit
+                          </button>
+                        ) : null}
+                        {canReturnPurchase ? (
+                          <button
+                            type="button"
+                            className="table-action-button"
+                            onClick={() => navigate(`/purchase-returns?purchaseId=${row.id}&billNo=${encodeURIComponent(row.billNo)}`)}
+                            disabled={row.status === 'cancelled'}
+                          >
+                            Return
+                          </button>
+                        ) : null}
+                        {canCreatePurchase ? (
+                          <button
+                            type="button"
+                            className="table-action-button table-action-button--danger"
+                            onClick={() => onCancelPurchase(row)}
+                            disabled={row.status === 'cancelled'}
+                          >
+                            Cancel
+                          </button>
+                        ) : null}
                       </div>
                     </td>
                   </tr>
@@ -1328,28 +1584,39 @@ export default function PurchasePage({ createMode = false }) {
 
             <div className="totals-panel">
               <div className="totals-row"><span>Sub Total</span><span>{toNumber(viewPurchase.subTotal).toFixed(2)}</span></div>
+              {(viewPurchase.additionalExpenses || []).map((expense, idx) => (
+                <div className="totals-row" key={`view-purchase-expense-${idx}`}><span>{expense.name}</span><span>{toNumber(expense.amount).toFixed(2)}</span></div>
+              ))}
+              <div className="totals-row"><span>Additional Expenses</span><span>{toNumber(viewPurchase.additionalExpensesTotal).toFixed(2)}</span></div>
               <div className="totals-row"><span>Discount</span><span>({toNumber(viewPurchase.discount).toFixed(2)})</span></div>
               <div className="totals-row totals-row--total"><span>Total</span><span>{toNumber(viewPurchase.totalAmount).toFixed(2)}</span></div>
               <div className="totals-row"><span>Paid</span><span>{toNumber(viewPurchase.paidAmount).toFixed(2)}</span></div>
               <div className="totals-row due-row"><span>Due</span><span>{toNumber(viewPurchase.dueAmount).toFixed(2)}</span></div>
             </div>
-            {viewLedgerBalance !== null ? (
+            {(() => {
+              const summary = deriveBalanceSummary(viewPurchase, viewLedgerBalance);
+              if (summary.netBalance === undefined || summary.previousBalance === undefined) return null;
+              return (
               <div style={{ marginTop: '0.75rem', padding: '8px 13px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 4, fontSize: '0.82rem', lineHeight: '1.7' }}>
-                <span style={{ color: '#6b7280' }}>Balance Before Purchase: </span>
-                <strong style={{ color: (viewLedgerBalance + toNumber(viewPurchase.totalAmount)) >= 0 ? '#15803d' : '#dc2626' }}>
-                  {Math.abs(viewLedgerBalance + toNumber(viewPurchase.totalAmount)).toFixed(2)}{' '}
-                  {(viewLedgerBalance + toNumber(viewPurchase.totalAmount)) >= 0 ? 'Dr' : 'Cr'}
+                <span style={{ color: '#6b7280' }}>Previous Balance: </span>
+                <strong style={{ color: summary.previousBalance >= 0 ? '#15803d' : '#dc2626' }}>
+                  {Math.abs(summary.previousBalance).toFixed(2)} {summary.previousBalance >= 0 ? 'Dr' : 'Cr'}
                 </strong>
-                <span style={{ color: '#6b7280', marginLeft: 24 }}>Current Balance (After): </span>
-                <strong style={{ color: viewLedgerBalance >= 0 ? '#15803d' : '#dc2626' }}>
-                  {Math.abs(viewLedgerBalance).toFixed(2)} {viewLedgerBalance >= 0 ? 'Dr' : 'Cr'}
+                <span style={{ color: '#6b7280', marginLeft: 24 }}>Net Balance: </span>
+                <strong style={{ color: summary.netBalance >= 0 ? '#15803d' : '#dc2626' }}>
+                  {Math.abs(summary.netBalance).toFixed(2)} {summary.netBalance >= 0 ? 'Dr' : 'Cr'}
                 </strong>
               </div>
-            ) : null}
+              );
+            })()}
           </div>
 
           <div className="inline-actions inline-actions--end no-print" style={{ marginTop: '1rem' }}>
-            <button type="button" className="secondary-action-button" onClick={() => printPurchase(viewPurchase)}>
+            <button
+              type="button"
+              className="secondary-action-button"
+              onClick={() => printPurchase(viewPurchase, deriveBalanceSummary(viewPurchase, viewLedgerBalance))}
+            >
               &#128424; Print
             </button>
             <button type="button" className="secondary-action-button" onClick={() => printGoodsReceiptNote(viewPurchase)}>

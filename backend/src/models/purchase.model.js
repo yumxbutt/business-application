@@ -38,6 +38,16 @@ const Purchase = sequelize.define(
       type: DataTypes.DECIMAL(14, 2),
       defaultValue: 0,
     },
+    additionalExpensesTotal: {
+      type: DataTypes.DECIMAL(14, 2),
+      field: 'additional_expenses_total',
+      defaultValue: 0,
+    },
+    additionalExpenses: {
+      type: DataTypes.TEXT('long'),
+      field: 'additional_expenses',
+      allowNull: true,
+    },
     totalAmount: {
       type: DataTypes.DECIMAL(14, 2),
       field: 'total_amount',
